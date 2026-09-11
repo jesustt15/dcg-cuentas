@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "dcg-cuentas",
+  "version": "0.1.0",
+  "identifier": "com.dcg.cuentas",
+  "build": {
+    "beforeDevCommand": "pnpm frontend:dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm frontend:build",
+    "frontendDist": "../src/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DCG Cuentas",
+        "width": 1100,
+        "height": 750,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.ico"]
+  }
+}

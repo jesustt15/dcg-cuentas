@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+release/
+*.pdb
+*.dll
+*.lib
+
+# Rust
+src-tauri/target/
+
+# Database
+**/cuentas.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
