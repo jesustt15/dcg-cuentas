@@ -34,13 +34,18 @@ export default function App() {
     <div className="flex min-h-screen">
       {/* SIDEBAR */}
       <aside className="w-64 bg-obsidian-dim border-r border-divider flex flex-col shrink-0">
-        <div className="p-6">
-          <h1 className="text-lg font-bold font-heading tracking-tight text-gold">
-            DCG BOX
-          </h1>
-          <p className="uppercase-label text-neutral-muted mt-1">
-            Centro Operativo
-          </p>
+        <div className="p-6 flex items-center gap-3">
+          <div className="w-11 h-11 rounded-lg bg-white p-1 flex items-center justify-center shadow-md shadow-black/40 border border-gold/40 shrink-0">
+            <img src="/logo.png" alt="DCG BOX" className="w-full h-full object-contain" />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold font-heading tracking-tight text-gold leading-none">
+              DCG BOX
+            </h1>
+            <p className="uppercase-label text-neutral-muted mt-1">
+              Centro Operativo
+            </p>
+          </div>
         </div>
         <nav className="flex-1 px-3 space-y-1">
           {navItems.map((item) => {
