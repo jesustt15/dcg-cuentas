@@ -1,145 +1,188 @@
-import { Link } from "react-router-dom";
-import { Plus, ArrowUpCircle, ArrowDownCircle, Wallet } from "lucide-react";
 import { useDb } from "@/hooks/DbProvider";
+import { usd, methodLabel, methodBadgeClass } from "@/lib/db";
+import { DollarSign, Users, AlertTriangle, TrendingUp } from "lucide-react";
 
 export default function Dashboard() {
   const { state } = useDb();
+  const d = state.dashboard;
 
-  const totalIn = state.transactions
-    .filter((tx) => tx.type === "income")
-    .reduce((sum, tx) => sum + tx.amount, 0);
+  if (!d) {
+    return <div className="text-neutral-muted text-sm">Cargando...</div>;
+  }
 
-  const totalOut = state.transactions
-    .filter((tx) => tx.type === "expense")
-    .reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
-
-  const balance = state.accounts.reduce((sum, acc) => sum + acc.balance, 0);
+  // Plan distribution: count athletes per plan
+  const planMap = new Map<string, number>();
+  for (const a of state.athletes) {
+    planMap.set(a.plan, (planMap.get(a.plan) || 0) + 1);
+  }
+  const planDistribution = state.plans.map((p) => ({
+    ...p,
+    count: planMap.get(p.code) || 0,
+  }));
+  const maxCount = Math.max(1, ...planDistribution.map((p) => p.count));
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h2 className="text-2xl font-bold text-gray-900">Dashboard</h2>
-        <p className="text-gray-500 mt-1">Resumen de tus cuentas</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <StatCard
-          label="Ingresos"
-          amount={totalIn}
-          icon={<ArrowUpCircle className="w-5 h-5" />}
-          color="text-emerald-600"
-          bg="bg-emerald-50"
-        />
-        <StatCard
-          label="Gastos"
-          amount={totalOut}
-          icon={<ArrowDownCircle className="w-5 h-5" />}
-          color="text-red-600"
-          bg="bg-red-50"
-        />
-        <StatCard
-          label="Balance"
-          amount={balance}
-          icon={<Wallet className="w-5 h-5" />}
-          color={balance >= 0 ? "text-blue-600" : "text-red-600"}
-          bg={balance >= 0 ? "bg-blue-50" : "bg-red-50"}
-        />
-      </div>
-
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Cuentas</h3>
-          <Link
-            to="/accounts/new"
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4" />
-            Nueva cuenta
-          </Link>
+    <div className="space-y-8 max-w-6xl">
+      {/* HEADER */}
+      <div className="flex items-end justify-between">
+        <div>
+          <div className="flex items-center gap-3 mb-2">
+            <h2 className="text-3xl font-bold font-heading tracking-tight text-neutral">
+              Dashboard
+            </h2>
+            <span className="inline-block w-2 h-2 rounded-sm bg-status-success animate-pulse" />
+          </div>
+          <p className="text-sm text-neutral-muted font-body">
+            Resumen operativo del box
+          </p>
         </div>
-        {state.accounts.length === 0 ? (
-          <div className="text-center py-12 border border-dashed border-gray-300 rounded-lg">
-            <p className="text-gray-500">No hay cuentas configuradas</p>
-            <p className="text-sm text-gray-400 mt-1">
-              Hacé clic en &quot;Nueva cuenta&quot; para empezar
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {state.accounts.map((acc) => (
-              <Link
-                key={acc.id}
-                to={`/accounts/${acc.id}`}
-                className="block p-4 bg-white border border-gray-200 rounded-lg hover:border-blue-300 transition-colors"
-              >
-                <p className="font-medium text-gray-900">{acc.name}</p>
-                <p className={`text-lg font-semibold mt-1 ${acc.balance >= 0 ? "text-blue-600" : "text-red-600"}`}>
-                  ${acc.balance.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                </p>
-              </Link>
-            ))}
-          </div>
-        )}
+        <div className="uppercase-label text-neutral-muted">
+          {new Date().toLocaleDateString("es-ES", {
+            weekday: "long",
+            day: "numeric",
+            month: "long",
+            year: "numeric",
+          })}
+        </div>
       </div>
 
-      <div>
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">Últimas transacciones</h3>
-          <Link
-            to="/transactions/new"
-            className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4" />
-            Nueva
-          </Link>
-        </div>
-        {state.transactions.length === 0 ? (
-          <div className="text-center py-8 border border-dashed border-gray-300 rounded-lg">
-            <p className="text-gray-500">Sin transacciones aún</p>
-          </div>
-        ) : (
-          <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
-            {state.transactions.slice(0, 5).map((tx) => (
-              <div key={tx.id} className="flex items-center justify-between p-4">
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-full ${tx.type === "income" ? "bg-emerald-100 text-emerald-600" : "bg-red-100 text-red-600"}`}>
-                    {tx.type === "income" ? <ArrowUpCircle className="w-4 h-4" /> : <ArrowDownCircle className="w-4 h-4" />}
+      {/* KPI CARDS */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+        <MetricCard
+          label="Ventas Hoy"
+          value={usd(d.today_sales_total)}
+          sub={`${d.today_sales_count} ventas`}
+          icon={<DollarSign className="w-4 h-4" />}
+          accent="bg-status-success"
+        />
+        <MetricCard
+          label="Atletas Activos"
+          value={String(d.active_athletes)}
+          sub={`${state.athletes.length} total`}
+          icon={<Users className="w-4 h-4" />}
+          accent="bg-gold"
+        />
+        <MetricCard
+          label="Deuda Total"
+          value={usd(d.total_debt)}
+          sub="saldos pendientes"
+          icon={<TrendingUp className="w-4 h-4" />}
+          accent="border-t-2 border-t-gold"
+          special
+        />
+        <MetricCard
+          label="Stock Bajo"
+          value={String(d.low_stock_count)}
+          sub="productos a reordenar"
+          icon={<AlertTriangle className="w-4 h-4" />}
+          accent={d.low_stock_count > 0 ? "bg-status-error" : "bg-neutral-muted"}
+        />
+      </div>
+
+      {/* TWO-COL: Recent Sales + Plan Distribution */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent Sales */}
+        <div>
+          <h3 className="text-lg font-bold font-heading text-neutral tracking-tight mb-4">
+            Últimas Ventas
+          </h3>
+          {d.recent_sales.length === 0 ? (
+            <div className="text-center py-12 border border-divider rounded bg-surface-low">
+              <p className="text-neutral-muted text-sm">Sin ventas registradas</p>
+            </div>
+          ) : (
+            <div className="bg-[#121215] border border-divider rounded overflow-hidden divide-y divide-divider">
+              {d.recent_sales.map((sale) => (
+                <div key={sale.id} className="flex items-center justify-between px-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-neutral truncate">
+                      {sale.athlete_name || "Mostrador"}
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="uppercase-label text-neutral-muted">
+                        {formatTimeAgo(sale.created_at)}
+                      </span>
+                      <span className="text-neutral-muted">·</span>
+                      <span className="text-neutral-muted">{sale.item_count} items</span>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{tx.description || tx.accountName}</p>
-                    <p className="text-xs text-gray-500">{new Date(tx.date).toLocaleDateString("es-AR")}</p>
+                  <div className="flex items-center gap-3 ml-3">
+                    <span className={`uppercase-label px-2 py-0.5 rounded ${methodBadgeClass(sale.payment_method)}`}>
+                      {methodLabel(sale.payment_method)}
+                    </span>
+                    <span className="font-mono font-semibold text-sm text-neutral">
+                      {usd(sale.total)}
+                    </span>
                   </div>
                 </div>
-                <span className={`font-semibold ${tx.type === "income" ? "text-emerald-600" : "text-red-600"}`}>
-                  {tx.type === "income" ? "+" : "-"}${Math.abs(tx.amount).toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Plan Distribution */}
+        <div>
+          <h3 className="text-lg font-bold font-heading text-neutral tracking-tight mb-4">
+            Distribución por Plan
+          </h3>
+          <div className="bg-[#121215] border border-divider rounded p-5 space-y-4">
+            {planDistribution.map((p) => (
+              <div key={p.code}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm text-neutral">{p.name}</span>
+                  <span className="font-mono text-sm text-neutral-muted">{p.count}</span>
+                </div>
+                <div className="h-1.5 bg-surface-high rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-gold rounded-full transition-all duration-500"
+                    style={{ width: `${(p.count / maxCount) * 100}%` }}
+                  />
+                </div>
               </div>
             ))}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-interface StatCardProps {
-  label: string;
-  amount: number;
-  icon: React.ReactNode;
-  color: string;
-  bg: string;
+function formatTimeAgo(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = now - then;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "ahora";
+  if (mins < 60) return `hace ${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs}h`;
+  const days = Math.floor(hrs / 24);
+  return `hace ${days}d`;
 }
 
-function StatCard({ label, amount, icon, color, bg }: StatCardProps) {
+interface MetricCardProps {
+  label: string;
+  value: string;
+  sub?: string;
+  icon?: React.ReactNode;
+  accent: string;
+  special?: boolean;
+}
+
+function MetricCard({ label, value, sub, icon, accent, special }: MetricCardProps) {
   return (
-    <div className="bg-white p-6 border border-gray-200 rounded-lg">
-      <div className="flex items-center justify-between mb-3">
-        <span className="text-sm font-medium text-gray-500">{label}</span>
-        <div className={`p-2 rounded-full ${bg} ${color}`}>{icon}</div>
+    <div
+      className={`relative bg-[#121215] border border-divider rounded p-5 overflow-hidden ${
+        special ? "border-t-2 border-t-gold" : ""
+      }`}
+    >
+      {!special && <div className={`absolute top-0 left-0 w-full h-[2px] ${accent}`} />}
+      <div className="flex items-center gap-2 mb-3">
+        {icon && <span className="text-neutral-muted">{icon}</span>}
+        <p className="uppercase-label text-neutral-muted">{label}</p>
       </div>
-      <p className={`text-2xl font-bold ${color}`}>
-        ${amount.toLocaleString("es-AR", { minimumFractionDigits: 2 })}
-      </p>
+      <p className="text-2xl font-bold font-mono tracking-tight text-neutral">{value}</p>
+      {sub && <p className="text-xs text-neutral-muted mt-1">{sub}</p>}
     </div>
   );
 }

@@ -7,11 +7,21 @@ fn main() {
     .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![
       db::init_db,
-      db::get_accounts,
-      db::get_transactions,
-      db::add_transaction,
-      db::delete_transaction,
-      db::create_account,
+      db::get_plans,
+      db::get_athletes,
+      db::get_athlete,
+      db::create_athlete,
+      db::update_athlete_status,
+      db::add_payment,
+      db::get_products,
+      db::create_product,
+      db::create_sale,
+      db::get_sales,
+      db::get_sale_items,
+      db::get_athlete_sales,
+      db::get_dashboard,
+      db::get_usd_ves,
+      db::set_usd_ves,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

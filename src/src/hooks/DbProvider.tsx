@@ -1,63 +1,54 @@
-import { createContext, useContext, useReducer, useEffect } from "react";
+import { createContext, useContext, useState, useEffect, useCallback } from "react";
 import type { DatabaseState } from "../types";
 import { db } from "../lib/db";
 
 const initialState: DatabaseState = {
-  accounts: [],
-  transactions: [],
+  plans: [],
+  athletes: [],
+  products: [],
+  sales: [],
+  dashboard: null,
+  usdVes: 36.5,
   loading: true,
   error: null,
 };
 
-type Action =
-  | { type: "SET_DATA"; payload: { accounts: import("../types").Account[]; transactions: import("../types").Transaction[] } }
-  | { type: "ADD_TRANSACTION"; payload: import("../types").Transaction }
-  | { type: "DELETE_TRANSACTION"; payload: string }
-  | { type: "ERROR"; payload: string };
-
-function reducer(state: DatabaseState, action: Action): DatabaseState {
-  switch (action.type) {
-    case "SET_DATA":
-      return { ...state, loading: false, accounts: action.payload.accounts, transactions: action.payload.transactions };
-    case "ADD_TRANSACTION":
-      return { ...state, transactions: [action.payload, ...state.transactions] };
-    case "DELETE_TRANSACTION":
-      return { ...state, transactions: state.transactions.filter((t) => t.id !== action.payload) };
-    case "ERROR":
-      return { ...state, loading: false, error: action.payload };
-    default:
-      return state;
-  }
-}
-
 const DbContext = createContext<{
   state: DatabaseState;
-  dispatch: React.Dispatch<Action>;
+  dispatch: () => void;
   refresh: () => void;
 }>({ state: initialState, dispatch: () => {}, refresh: () => {} });
 
 export function DbProvider({ children }: { children: React.ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
-  
-  const loadData = async () => {
+  const [state, setState] = useState<DatabaseState>(initialState);
+
+  const loadData = useCallback(async () => {
     try {
       await db.init();
-      const [accounts, transactions] = await Promise.all([
-        db.getAllAccounts(),
-        db.getTransactions(),
+      const [plans, athletes, products, sales, dashboard, usdVes] = await Promise.all([
+        db.getPlans(),
+        db.getAthletes(),
+        db.getProducts(),
+        db.getSales(),
+        db.getDashboard(),
+        db.getUsdVes(),
       ]);
-      dispatch({ type: "SET_DATA", payload: { accounts, transactions } });
+      setState({ plans, athletes, products, sales, dashboard, usdVes, loading: false, error: null });
     } catch (e) {
-      dispatch({ type: "ERROR", payload: e instanceof Error ? e.message : String(e) });
+      setState((s) => ({
+        ...s,
+        loading: false,
+        error: e instanceof Error ? e.message : String(e),
+      }));
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [loadData]);
 
   return (
-    <DbContext.Provider value={{ state, dispatch, refresh: loadData }}>
+    <DbContext.Provider value={{ state, dispatch: loadData, refresh: loadData }}>
       {children}
     </DbContext.Provider>
   );
@@ -66,6 +57,3 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 export function useDb() {
   return useContext(DbContext);
 }
-
-
-
