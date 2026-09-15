@@ -1,7 +1,7 @@
 import { useDb } from "@/hooks/DbProvider";
 import { usd, methodLabel, methodBadgeClass } from "@/lib/db";
 import { db } from "@/lib/db";
-import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle, MessageCircle, Settings } from "lucide-react";
+import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle, MessageCircle, Settings, ChevronRight } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { normalizeVePhone, buildWaLink } from "@/lib/phone";
@@ -229,30 +229,47 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="bg-[#121215] border border-divider rounded overflow-hidden divide-y divide-divider">
-              {d.recent_sales.map((sale) => (
-                <div key={sale.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-neutral truncate">
-                      {sale.athlete_name || "Mostrador"}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="uppercase-label text-neutral-muted">
-                        {formatTimeAgo(sale.created_at)}
+              {d.recent_sales.map((sale) => {
+                const hasAthlete = !!sale.athlete_id;
+                return (
+                  <div
+                    key={sale.id}
+                    onClick={() => {
+                      if (sale.athlete_id) navigate(`/athletes/${sale.athlete_id}`);
+                    }}
+                    className={`flex items-center justify-between px-4 py-3 transition-colors ${
+                      hasAthlete
+                        ? "cursor-pointer hover:bg-surface-high/50"
+                        : "cursor-default"
+                    }`}
+                    title={hasAthlete ? "Ver detalle del atleta" : ""}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-neutral truncate">
+                        {sale.athlete_name || "Mostrador"}
+                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="uppercase-label text-neutral-muted">
+                          {formatTimeAgo(sale.created_at)}
+                        </span>
+                        <span className="text-neutral-muted">&middot;</span>
+                        <span className="text-neutral-muted">{sale.item_count} items</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 ml-3">
+                      <span className={`uppercase-label px-2 py-0.5 rounded ${methodBadgeClass(sale.payment_method)}`}>
+                        {methodLabel(sale.payment_method)}
                       </span>
-                      <span className="text-neutral-muted">&middot;</span>
-                      <span className="text-neutral-muted">{sale.item_count} items</span>
+                      <span className="font-mono font-semibold text-sm text-neutral">
+                        {usd(sale.total)}
+                      </span>
+                      {hasAthlete && (
+                        <ChevronRight className="w-4 h-4 text-neutral-muted ml-1" />
+                      )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 ml-3">
-                    <span className={`uppercase-label px-2 py-0.5 rounded ${methodBadgeClass(sale.payment_method)}`}>
-                      {methodLabel(sale.payment_method)}
-                    </span>
-                    <span className="font-mono font-semibold text-sm text-neutral">
-                      {usd(sale.total)}
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -453,40 +470,43 @@ function BatchSendModal({
               const template =
                 "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
               const message = renderReminder(template, vars);
-              const waUrl = buildWaLink(phone, message);
+
+              if (isSent) {
+                return (
+                  <div
+                    key={a.id}
+                    className="bg-[#121215] border border-divider rounded-lg p-4 opacity-50"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-neutral truncate">{a.name}</p>
+                        <p className="text-xs text-neutral-muted mt-0.5">{plans.find((p) => p.code === a.plan)?.name || a.plan}</p>
+                      </div>
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-status-success/20 text-status-success">
+                        Enviado
+                      </span>
+                    </div>
+                  </div>
+                );
+              }
 
               return (
                 <div
                   key={a.id}
-                  className={`bg-[#121215] border border-divider rounded-lg p-4 transition-opacity ${
-                    isSent ? "opacity-50" : ""
-                  }`}
+                  onClick={() => handleMessageSent(a)}
+                  className="bg-[#121215] border border-divider rounded-lg p-4 cursor-pointer hover:border-green-600/40 hover:bg-green-600/5 transition-colors group"
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-neutral truncate">{a.name}</p>
                       <p className="text-xs text-neutral-muted mt-0.5">{plans.find((p) => p.code === a.plan)?.name || a.plan}</p>
                     </div>
-                    {isSent ? (
-                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-status-success/20 text-status-success">
-                        Enviado
-                      </span>
-                    ) : (
-                      <a
-                        href={waUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() => handleMessageSent(a)}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-green-600/20 text-green-400 rounded hover:bg-green-600/30 transition-colors"
-                      >
-                        <MessageCircle className="w-3.5 h-3.5" />
-                        Abrir chat
-                      </a>
-                    )}
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-green-600/20 text-green-400 rounded group-hover:bg-green-600/30 transition-colors shrink-0">
+                      <MessageCircle className="w-3.5 h-3.5" />
+                      Enviar
+                    </span>
                   </div>
-                  {!isSent && (
-                    <p className="mt-2 text-xs text-neutral-muted line-clamp-2">{message}</p>
-                  )}
+                  <p className="mt-2 text-xs text-neutral-muted line-clamp-2">{message}</p>
                 </div>
               );
             })
