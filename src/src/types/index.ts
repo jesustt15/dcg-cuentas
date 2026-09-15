@@ -71,6 +71,30 @@ export interface DashboardStats {
   expiring_athletes: Athlete[];
 }
 
+export interface SalesChartPoint {
+  day: string;
+  total: number;
+  count: number;
+}
+
+export interface CXCAging {
+  current: number;
+  days_31_60: number;
+  days_61_90: number;
+  over_90: number;
+}
+
+export interface DebtorRow {
+  id: string;
+  name: string;
+  phone: string;
+  plan: string;
+  balance: number;
+  credit_limit: number;
+  days_overdue: number;
+  last_payment_date: string | null;
+}
+
 export interface ImportResult {
   total_rows: number;
   imported: number;
@@ -94,6 +118,13 @@ export interface DatabaseState {
   sales: Sale[];
   dashboard: DashboardStats | null;
   usdVes: number;
+  pendingReminders: Athlete[];
+  weekSalesTotal: number;
+  monthSalesTotal: number;
+  yearSalesTotal: number;
+  salesChart: SalesChartPoint[];
+  cxcAging: CXCAging;
+  debtors: DebtorRow[];
   loading: boolean;
   error: string | null;
 }

@@ -2,8 +2,11 @@ import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { db, usd, formatBs, methodLabel, methodBadgeClass } from "@/lib/db";
 import type { Athlete, Sale, SaleItem, Payment } from "@/types";
-import { ArrowLeft, CreditCard, DollarSign, ChevronRight, Calendar, CheckCircle } from "lucide-react";
+import { ArrowLeft, CreditCard, DollarSign, ChevronRight, Calendar, CheckCircle, MessageCircle } from "lucide-react";
 import { useDb } from "@/hooks/DbProvider";
+import { normalizeVePhone, buildWaLink } from "@/lib/phone";
+import { renderReminder } from "@/lib/reminder";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export default function AthleteDetail() {
   const { id } = useParams<{ id: string }>();
@@ -176,6 +179,38 @@ export default function AthleteDetail() {
         <h3 className="text-sm font-bold font-heading text-neutral uppercase-label flex items-center gap-2">
           <Calendar className="w-4 h-4 text-gold" />
           Pagar Mensualidad
+          {athlete.phone && normalizeVePhone(athlete.phone) && (
+            <button
+              onClick={async () => {
+                const phone = normalizeVePhone(athlete.phone)!;
+                const plan = state.plans.find((p) => p.code === athlete.plan);
+                const vars: Record<string, string> = {
+                  nombre: athlete.name,
+                  plan: plan?.name || athlete.plan,
+                  vence: athlete.plan_expires_at || "sin fecha",
+                  monto: String(plan?.price || 0),
+                  dias: athlete.plan_expires_at
+                    ? String(
+                        Math.ceil(
+                          (new Date(athlete.plan_expires_at).getTime() - Date.now()) /
+                            (1000 * 60 * 60 * 24),
+                        ),
+                      )
+                    : "0",
+                };
+                const template =
+                  (await db.getSetting("reminder_template")) ||
+                  "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
+                const message = renderReminder(template, vars);
+                await openUrl(buildWaLink(phone, message));
+                await db.logReminder(athlete.id, "whatsapp");
+              }}
+              className="ml-auto p-2 rounded-lg bg-green-600/20 hover:bg-green-600/30 text-green-400 transition-colors"
+              title="Enviar recordatorio por WhatsApp"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
+          )}
         </h3>
         <PlanStatusCard athlete={athlete} plan={state.plans.find((p) => p.code === athlete.plan)} />
         <MonthlyPaymentForm
