@@ -61,7 +61,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI CARDS */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <MetricCard
           label="Ventas Hoy"
           value={usd(d.today_sales_total)}
@@ -78,12 +78,6 @@ export default function Dashboard() {
         <MetricCard
           label="Este Mes"
           value={usd(state.monthSalesTotal)}
-          icon={<TrendingUp className="w-4 h-4" />}
-          accent="bg-status-success"
-        />
-        <MetricCard
-          label="Este Año"
-          value={usd(state.yearSalesTotal)}
           icon={<TrendingUp className="w-4 h-4" />}
           accent="bg-status-success"
         />
