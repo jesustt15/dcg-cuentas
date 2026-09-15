@@ -1,9 +1,10 @@
 import { Routes, Route, Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, ShoppingCart, Package, Pencil, Check } from "lucide-react";
+import { LayoutDashboard, Users, ShoppingCart, Package, Pencil, Check, RefreshCw, AlertCircle } from "lucide-react";
 import { useState } from "react";
 import Dashboard from "@/pages/Dashboard";
 import Athletes from "@/pages/Athletes";
 import AthleteDetail from "@/pages/AthleteDetail";
+import Debts from "@/pages/Debts";
 import POS from "@/pages/POS";
 import Products from "@/pages/Products";
 import { useDb } from "@/hooks/DbProvider";
@@ -12,6 +13,7 @@ import { db } from "@/lib/db";
 const navItems = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
   { label: "Atletas", path: "/athletes", icon: Users },
+  { label: "Deudas", path: "/debts", icon: AlertCircle },
   { label: "POS", path: "/pos", icon: ShoppingCart },
   { label: "Productos", path: "/products", icon: Package },
 ];
@@ -21,6 +23,8 @@ export default function App() {
   const { state, refresh } = useDb();
   const [editingRate, setEditingRate] = useState(false);
   const [rateInput, setRateInput] = useState(String(state.usdVes));
+  const [fetching, setFetching] = useState(false);
+  const [fetchMsg, setFetchMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const saveRate = async () => {
     const val = parseFloat(rateInput);
@@ -28,6 +32,22 @@ export default function App() {
     await db.setUsdVes(val);
     setEditingRate(false);
     refresh();
+  };
+
+  const handleFetchBcv = async () => {
+    setFetching(true);
+    setFetchMsg(null);
+    try {
+      const rate = await db.fetchBcvRate();
+      refresh();
+      setFetchMsg({ type: "success", text: `Tasa actualizada: ${rate.toFixed(2)}` });
+      setTimeout(() => setFetchMsg(null), 3000);
+    } catch (e) {
+      setFetchMsg({ type: "error", text: e instanceof Error ? e.message : String(e) });
+      setTimeout(() => setFetchMsg(null), 5000);
+    } finally {
+      setFetching(false);
+    }
   };
 
   return (
@@ -106,6 +126,21 @@ export default function App() {
               </div>
             )}
           </div>
+          {/* BCV Refresh */}
+          <button
+            onClick={handleFetchBcv}
+            disabled={fetching || editingRate}
+            className="w-full flex items-center justify-center gap-2 bg-surface-high hover:bg-obsidian-base border border-divider rounded px-3 py-1.5 text-xs uppercase-label text-neutral-muted hover:text-gold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Actualizar tasa BCV"
+          >
+            <RefreshCw className={`w-3 h-3 ${fetching ? "animate-spin" : ""}`} />
+            {fetching ? "Actualizando..." : "Actualizar BCV"}
+          </button>
+          {fetchMsg && (
+            <p className={`text-xs text-center ${fetchMsg.type === "success" ? "text-emerald-400" : "text-red-400"}`}>
+              {fetchMsg.text}
+            </p>
+          )}
           <p className="uppercase-label text-neutral-muted">DCG BOX — Centro Operativo</p>
         </div>
       </aside>
@@ -116,6 +151,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="/athletes" element={<Athletes />} />
           <Route path="/athletes/:id" element={<AthleteDetail />} />
+          <Route path="/debts" element={<Debts />} />
           <Route path="/pos" element={<POS />} />
           <Route path="/products" element={<Products />} />
         </Routes>

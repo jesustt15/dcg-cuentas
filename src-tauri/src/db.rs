@@ -1,3 +1,4 @@
+use calamine::{open_workbook, Data, Reader, Xlsx};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -21,6 +22,7 @@ pub struct Athlete {
   pub status: String,
   pub balance: f64,
   pub credit_limit: f64,
+  pub plan_expires_at: Option<String>,
   pub created_at: String,
 }
 
@@ -33,6 +35,7 @@ pub struct Product {
   pub cost: f64,
   pub stock: i32,
   pub min_stock: i32,
+  pub image_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -74,6 +77,7 @@ pub struct DashboardStats {
   pub total_debt: f64,
   pub low_stock_count: i32,
   pub recent_sales: Vec<Sale>,
+  pub expiring_athletes: Vec<Athlete>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -81,6 +85,26 @@ pub struct SaleItemInput {
   pub product_id: String,
   pub qty: i32,
   pub unit_price: f64,
+}
+
+// ─── Excel Import Types ──────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ImportResult {
+  pub total_rows: usize,
+  pub imported: usize,
+  pub skipped: usize,
+  pub errors: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExcelRow {
+  pub row_number: usize,
+  pub nombre: String,
+  pub telefono: String,
+  pub plan: String,
+  pub valid: bool,
+  pub error: Option<String>,
 }
 
 // ─── DB Path & Connection ────────────────────────────────────────────────────
@@ -130,7 +154,8 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
         price REAL NOT NULL,
         cost REAL NOT NULL DEFAULT 0,
         stock INTEGER NOT NULL DEFAULT 0,
-        min_stock INTEGER NOT NULL DEFAULT 5
+        min_stock INTEGER NOT NULL DEFAULT 5,
+        image_path TEXT
       );
 
       CREATE TABLE IF NOT EXISTS sales (
@@ -169,6 +194,13 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
       ",
     )
     .map_err(|e| e.to_string())?;
+
+  // Migration: add image_path column to existing products tables
+  // Ignore error if column already exists
+  let _ = conn.execute_batch("ALTER TABLE products ADD COLUMN image_path TEXT;");
+
+  // Migration: add plan_expires_at column to athletes table
+  let _ = conn.execute_batch("ALTER TABLE athletes ADD COLUMN plan_expires_at TEXT;");
 
   // Seed plans if empty
   let plan_count: i32 = conn
@@ -257,7 +289,7 @@ pub fn get_athletes(app: tauri::AppHandle) -> Result<Vec<Athlete>, String> {
   ensure_schema(&conn)?;
   let mut stmt = conn
     .prepare(
-      "SELECT id, name, phone, plan, status, balance, credit_limit, created_at
+      "SELECT id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at
        FROM athletes ORDER BY name",
     )
     .map_err(|e| e.to_string())?;
@@ -271,7 +303,8 @@ pub fn get_athletes(app: tauri::AppHandle) -> Result<Vec<Athlete>, String> {
         status: row.get(4)?,
         balance: row.get(5)?,
         credit_limit: row.get(6)?,
-        created_at: row.get(7)?,
+        plan_expires_at: row.get(7)?,
+        created_at: row.get(8)?,
       })
     })
     .map_err(|e| e.to_string())?;
@@ -284,7 +317,7 @@ pub fn get_athlete(app: tauri::AppHandle, id: String) -> Result<Athlete, String>
   ensure_schema(&conn)?;
   conn
     .query_row(
-      "SELECT id, name, phone, plan, status, balance, credit_limit, created_at
+      "SELECT id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at
        FROM athletes WHERE id = ?1",
       [&id],
       |row| {
@@ -296,7 +329,8 @@ pub fn get_athlete(app: tauri::AppHandle, id: String) -> Result<Athlete, String>
           status: row.get(4)?,
           balance: row.get(5)?,
           credit_limit: row.get(6)?,
-          created_at: row.get(7)?,
+          plan_expires_at: row.get(7)?,
+          created_at: row.get(8)?,
         })
       },
     )
@@ -310,6 +344,7 @@ pub fn create_athlete(
   phone: String,
   plan: String,
   credit_limit: Option<f64>,
+  plan_expires_at: Option<String>,
 ) -> Result<String, String> {
   let conn = connect(&app)?;
   ensure_schema(&conn)?;
@@ -318,9 +353,9 @@ pub fn create_athlete(
   let limit = credit_limit.unwrap_or(150.0);
   conn
     .execute(
-      "INSERT INTO athletes (id, name, phone, plan, status, balance, credit_limit, created_at)
-       VALUES (?1, ?2, ?3, ?4, 'activo', 0, ?5, ?6)",
-      params![&id, &name, &phone, &plan, &limit, &created_at],
+      "INSERT INTO athletes (id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at)
+       VALUES (?1, ?2, ?3, ?4, 'activo', 0, ?5, ?6, ?7)",
+      params![&id, &name, &phone, &plan, &limit, &plan_expires_at, &created_at],
     )
     .map_err(|e| e.to_string())?;
   Ok(id)
@@ -346,7 +381,7 @@ pub fn add_payment(
   amount: f64,
   method: String,
 ) -> Result<(), String> {
-  let valid_payment_methods = ["efectivo", "zelle", "pago_movil"];
+  let valid_payment_methods = ["efectivo", "pago_movil"];
   if !valid_payment_methods.contains(&method.as_str()) {
     return Err(format!("Invalid payment method: {method}"));
   }
@@ -374,12 +409,79 @@ pub fn add_payment(
 }
 
 #[tauri::command]
+pub fn pay_monthly_plan(
+  app: tauri::AppHandle,
+  athlete_id: String,
+  amount: f64,
+  method: String,
+) -> Result<(), String> {
+  let valid_payment_methods = ["efectivo", "pago_movil"];
+  if !valid_payment_methods.contains(&method.as_str()) {
+    return Err(format!("Invalid payment method: {method}"));
+  }
+  if amount <= 0.0 {
+    return Err("Amount must be positive".to_string());
+  }
+
+  let mut conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Validate athlete exists and is active
+  let status: String = conn
+    .query_row(
+      "SELECT status FROM athletes WHERE id = ?1",
+      [&athlete_id],
+      |row| row.get(0),
+    )
+    .map_err(|_| "Athlete not found".to_string())?;
+  if status != "activo" {
+    return Err("Athlete must be active to pay monthly plan".to_string());
+  }
+
+  let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+  // Extend plan_expires_at:
+  // - NULL or past → today + 1 month
+  // - today or future → current + 1 month
+  tx.execute(
+    "UPDATE athletes SET plan_expires_at = CASE
+       WHEN plan_expires_at IS NULL OR DATE(plan_expires_at) < DATE('now')
+         THEN DATE('now', '+1 month')
+       ELSE DATE(DATE(plan_expires_at), '+1 month')
+     END
+     WHERE id = ?1",
+    params![&athlete_id],
+  )
+  .map_err(|e| e.to_string())?;
+
+  // Insert payment record (same as regular payment)
+  let payment_id = uuid::Uuid::new_v4().to_string();
+  let created_at = chrono::Utc::now().to_rfc3339();
+  tx.execute(
+    "INSERT INTO payments (id, athlete_id, amount, method, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5)",
+    params![&payment_id, &athlete_id, &amount, &method, &created_at],
+  )
+  .map_err(|e| e.to_string())?;
+
+  // Reduce athlete balance (same as regular payment)
+  tx.execute(
+    "UPDATE athletes SET balance = MAX(0, balance - ?1) WHERE id = ?2",
+    params![&amount, &athlete_id],
+  )
+  .map_err(|e| e.to_string())?;
+
+  tx.commit().map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
 pub fn get_products(app: tauri::AppHandle) -> Result<Vec<Product>, String> {
   let conn = connect(&app)?;
   ensure_schema(&conn)?;
   let mut stmt = conn
     .prepare(
-      "SELECT id, name, category, price, cost, stock, min_stock
+      "SELECT id, name, category, price, cost, stock, min_stock, image_path
        FROM products ORDER BY category, name",
     )
     .map_err(|e| e.to_string())?;
@@ -393,6 +495,7 @@ pub fn get_products(app: tauri::AppHandle) -> Result<Vec<Product>, String> {
         cost: row.get(4)?,
         stock: row.get(5)?,
         min_stock: row.get(6)?,
+        image_path: row.get(7)?,
       })
     })
     .map_err(|e| e.to_string())?;
@@ -423,7 +526,194 @@ pub fn create_product(
       params![&id, &name, &category, &price, &cost, &stock, &min_stock],
     )
     .map_err(|e| e.to_string())?;
-  Ok(id)
+   Ok(id)
+}
+
+#[tauri::command]
+pub fn update_product(
+  app: tauri::AppHandle,
+  id: String,
+  name: String,
+  category: String,
+  price: f64,
+  cost: f64,
+  stock: i32,
+  min_stock: i32,
+) -> Result<(), String> {
+  let valid_categories = ["ropa", "suplementos", "implementos", "bebidas"];
+  if !valid_categories.contains(&category.as_str()) {
+    return Err(format!("Invalid category: {category}"));
+  }
+  if price < 0.0 {
+    return Err("Price cannot be negative".to_string());
+  }
+  if cost < 0.0 {
+    return Err("Cost cannot be negative".to_string());
+  }
+  if stock < 0 {
+    return Err("Stock cannot be negative".to_string());
+  }
+  if min_stock < 0 {
+    return Err("Minimum stock cannot be negative".to_string());
+  }
+
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Check if product exists
+  let exists: bool = conn
+    .query_row("SELECT COUNT(*) FROM products WHERE id = ?1", params![&id], |row| {
+      row.get::<_, i32>(0)
+    })
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !exists {
+    return Err(format!("Product not found: {id}"));
+  }
+
+  let rows_affected = conn
+    .execute(
+      "UPDATE products SET name = ?1, category = ?2, price = ?3, cost = ?4, stock = ?5, min_stock = ?6 WHERE id = ?7",
+      params![&name, &category, &price, &cost, &stock, &min_stock, &id],
+    )
+    .map_err(|e| e.to_string())?;
+
+  if rows_affected == 0 {
+    return Err(format!("Failed to update product: {id}"));
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub fn delete_product(app: tauri::AppHandle, id: String) -> Result<(), String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Check if product exists
+  let exists: bool = conn
+    .query_row("SELECT COUNT(*) FROM products WHERE id = ?1", params![&id], |row| {
+      row.get::<_, i32>(0)
+    })
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !exists {
+    return Err(format!("Product not found: {id}"));
+  }
+
+  // Check if product is referenced in sale_items
+  let ref_count: i32 = conn
+    .query_row(
+      "SELECT COUNT(*) FROM sale_items WHERE product_id = ?1",
+      params![&id],
+      |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())?;
+  if ref_count > 0 {
+    return Err(format!(
+      "Cannot delete: this product is referenced in {ref_count} sale(s). Remove those records first."
+    ));
+  }
+
+  conn
+    .execute("DELETE FROM products WHERE id = ?1", params![&id])
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+// ─── Image Upload ────────────────────────────────────────────────────────────
+
+fn images_dir_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+  let dir = app
+    .path()
+    .app_data_dir()
+    .map_err(|e| e.to_string())?
+    .join("images");
+  std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+  Ok(dir)
+}
+
+#[tauri::command]
+pub fn upload_product_image(
+  app: tauri::AppHandle,
+  product_id: String,
+  image_data: Vec<u8>,
+  extension: String,
+) -> Result<String, String> {
+  // Validate extension
+  let ext = extension.to_lowercase();
+  let valid_extensions = ["jpg", "jpeg", "png", "webp"];
+  if !valid_extensions.contains(&ext.as_str()) {
+    return Err(format!("Invalid image format: {ext}. Allowed: jpg, png, webp"));
+  }
+
+  // Validate size (max 5 MB)
+  const MAX_SIZE: usize = 5 * 1024 * 1024;
+  if image_data.len() > MAX_SIZE {
+    return Err(format!(
+      "Image too large ({} KB). Maximum size is 5 MB.",
+      image_data.len() / 1024
+    ));
+  }
+
+  let images_dir = images_dir_path(&app)?;
+
+  // Check if product exists
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let exists: bool = conn
+    .query_row(
+      "SELECT COUNT(*) FROM products WHERE id = ?1",
+      params![&product_id],
+      |row| row.get::<_, i32>(0),
+    )
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !exists {
+    return Err(format!("Product not found: {product_id}"));
+  }
+
+  // Get old image path to clean up
+  let old_path: Option<String> = conn
+    .query_row(
+      "SELECT image_path FROM products WHERE id = ?1",
+      params![&product_id],
+      |row| row.get(0),
+    )
+    .ok();
+
+  // Generate filename: {product_id}_{timestamp}.{ext}
+  let timestamp = chrono::Utc::now().timestamp_millis();
+  let filename = format!("{product_id}_{timestamp}.{ext}");
+  let file_path = images_dir.join(&filename);
+
+  // Write image file
+  std::fs::write(&file_path, &image_data).map_err(|e| format!("Failed to write image: {e}"))?;
+
+  // Delete old image file if it exists
+  if let Some(ref old_p) = old_path {
+    if !old_p.is_empty() {
+      let old_full = images_dir.join(old_p);
+      let _ = std::fs::remove_file(&old_full);
+    }
+  }
+
+  // Update product's image_path in database
+  conn
+    .execute(
+      "UPDATE products SET image_path = ?1 WHERE id = ?2",
+      params![&filename, &product_id],
+    )
+    .map_err(|e| e.to_string())?;
+
+  Ok(filename)
+}
+
+#[tauri::command]
+pub fn get_images_dir(app: tauri::AppHandle) -> Result<String, String> {
+  let dir = images_dir_path(&app)?;
+  Ok(dir.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -433,7 +723,7 @@ pub fn create_sale(
   items: Vec<SaleItemInput>,
   payment_method: String,
 ) -> Result<String, String> {
-  let valid_methods = ["efectivo", "zelle", "cuenta", "pago_movil"];
+  let valid_methods = ["efectivo", "cuenta", "pago_movil"];
   if !valid_methods.contains(&payment_method.as_str()) {
     return Err(format!("Invalid payment method: {payment_method}"));
   }
@@ -599,6 +889,89 @@ pub fn get_athlete_sales(app: tauri::AppHandle, athlete_id: String) -> Result<Ve
 }
 
 #[tauri::command]
+pub fn get_athlete_payments(app: tauri::AppHandle, athlete_id: String) -> Result<Vec<Payment>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, athlete_id, amount, method, created_at
+       FROM payments
+       WHERE athlete_id = ?1
+       ORDER BY created_at DESC",
+    )
+    .map_err(|e| e.to_string())?;
+  let payments = stmt
+    .query_map([&athlete_id], |row| {
+      Ok(Payment {
+        id: row.get(0)?,
+        athlete_id: row.get(1)?,
+        amount: row.get(2)?,
+        method: row.get(3)?,
+        created_at: row.get(4)?,
+      })
+    })
+    .map_err(|e| e.to_string())?;
+  Ok(payments.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn get_all_payments(app: tauri::AppHandle) -> Result<Vec<Payment>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, athlete_id, amount, method, created_at
+       FROM payments
+       ORDER BY created_at DESC",
+    )
+    .map_err(|e| e.to_string())?;
+  let payments = stmt
+    .query_map([], |row| {
+      Ok(Payment {
+        id: row.get(0)?,
+        athlete_id: row.get(1)?,
+        amount: row.get(2)?,
+        method: row.get(3)?,
+        created_at: row.get(4)?,
+      })
+    })
+    .map_err(|e| e.to_string())?;
+  Ok(payments.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn get_expiring_athletes(app: tauri::AppHandle) -> Result<Vec<Athlete>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at
+       FROM athletes
+       WHERE status = 'activo'
+         AND plan_expires_at IS NOT NULL
+         AND (DATE(plan_expires_at) < DATE('now', '+4 days'))
+       ORDER BY plan_expires_at ASC",
+    )
+    .map_err(|e| e.to_string())?;
+  let athletes = stmt
+    .query_map([], |row| {
+      Ok(Athlete {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        phone: row.get(2)?,
+        plan: row.get(3)?,
+        status: row.get(4)?,
+        balance: row.get(5)?,
+        credit_limit: row.get(6)?,
+        plan_expires_at: row.get(7)?,
+        created_at: row.get(8)?,
+      })
+    })
+    .map_err(|e| e.to_string())?;
+  Ok(athletes.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
 pub fn get_dashboard(app: tauri::AppHandle) -> Result<DashboardStats, String> {
   let conn = connect(&app)?;
   ensure_schema(&conn)?;
@@ -669,6 +1042,35 @@ pub fn get_dashboard(app: tauri::AppHandle) -> Result<DashboardStats, String> {
     .filter_map(|r| r.ok())
     .collect();
 
+  // Expiring athletes (expiring within 3 days or already expired)
+  let mut exp_stmt = conn
+    .prepare(
+      "SELECT id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at
+       FROM athletes
+       WHERE status = 'activo'
+         AND plan_expires_at IS NOT NULL
+         AND (DATE(plan_expires_at) < DATE('now', '+4 days'))
+       ORDER BY plan_expires_at ASC",
+    )
+    .map_err(|e| e.to_string())?;
+  let expiring_athletes: Vec<Athlete> = exp_stmt
+    .query_map([], |row| {
+      Ok(Athlete {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        phone: row.get(2)?,
+        plan: row.get(3)?,
+        status: row.get(4)?,
+        balance: row.get(5)?,
+        credit_limit: row.get(6)?,
+        plan_expires_at: row.get(7)?,
+        created_at: row.get(8)?,
+      })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
   Ok(DashboardStats {
     today_sales_total,
     today_sales_count,
@@ -676,6 +1078,7 @@ pub fn get_dashboard(app: tauri::AppHandle) -> Result<DashboardStats, String> {
     total_debt,
     low_stock_count,
     recent_sales,
+    expiring_athletes,
   })
 }
 
@@ -708,4 +1111,404 @@ pub fn set_usd_ves(app: tauri::AppHandle, rate: f64) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
   Ok(())
+}
+
+// ─── BCV Exchange Rate Fetch ─────────────────────────────────────────────────
+
+const BCV_API_URL: &str = "https://ve.dolarapi.com/v1/dolares/oficial";
+
+/// Internal helper: fetch rate from API and persist to settings.
+/// Called by both manual and auto-fetch commands.
+async fn do_fetch_and_save(app: &tauri::AppHandle) -> Result<f64, String> {
+  let client = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .build()
+    .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+
+  let resp = client
+    .get(BCV_API_URL)
+    .send()
+    .await
+    .map_err(|e| format!("Network error: {}", e))?;
+
+  if !resp.status().is_success() {
+    return Err(format!("API returned HTTP {}", resp.status()));
+  }
+
+  let json: serde_json::Value = resp
+    .json()
+    .await
+    .map_err(|e| format!("Failed to parse API response: {}", e))?;
+
+  let rate = json["promedio"]
+    .as_f64()
+    .ok_or_else(|| "Missing 'promedio' field in API response".to_string())?;
+
+  if rate <= 0.0 {
+    return Err(format!("Invalid rate from API: {}", rate));
+  }
+
+  // Persist rate + timestamp
+  let conn = connect(app)?;
+  ensure_schema(&conn)?;
+
+  conn
+    .execute(
+      "INSERT INTO settings (key, value) VALUES ('usd_ves', ?1)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      params![&rate.to_string()],
+    )
+    .map_err(|e| format!("Failed to save rate: {}", e))?;
+
+  let now = chrono::Utc::now().to_rfc3339();
+  conn
+    .execute(
+      "INSERT INTO settings (key, value) VALUES ('last_bcv_fetch', ?1)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      params![&now],
+    )
+    .map_err(|e| format!("Failed to save timestamp: {}", e))?;
+
+  println!("BCV rate updated: {:.4} at {}", rate, now);
+  Ok(rate)
+}
+
+#[tauri::command]
+pub async fn fetch_bcv_rate(app: tauri::AppHandle) -> Result<f64, String> {
+  do_fetch_and_save(&app).await
+}
+
+#[tauri::command]
+pub async fn maybe_auto_fetch_bcv(app: tauri::AppHandle) -> Result<Option<f64>, String> {
+  // Check if we need to fetch (sync DB read, drop connection before async)
+  let needs_fetch = {
+    let conn = connect(&app)?;
+    ensure_schema(&conn)?;
+
+    let last_fetch: Option<String> = conn
+      .query_row(
+        "SELECT value FROM settings WHERE key = 'last_bcv_fetch'",
+        [],
+        |row| row.get(0),
+      )
+      .ok();
+
+    match last_fetch {
+      Some(ts) => {
+        match chrono::DateTime::parse_from_rfc3339(&ts) {
+          Ok(parsed) => {
+            let hours = chrono::Utc::now()
+              .signed_duration_since(parsed.with_timezone(&chrono::Utc))
+              .num_hours();
+            hours >= 24
+          }
+          Err(_) => true, // Invalid timestamp, re-fetch
+        }
+      }
+      None => true, // Never fetched before
+    }
+  };
+
+  if !needs_fetch {
+    return Ok(None);
+  }
+
+  // Fetch (connection is dropped, safe to hold across await)
+  match do_fetch_and_save(&app).await {
+    Ok(rate) => Ok(Some(rate)),
+    Err(e) => {
+      println!("Auto-fetch failed (non-fatal): {}", e);
+      Ok(None) // Silent failure for auto-fetch
+    }
+  }
+}
+
+#[tauri::command]
+pub fn update_athlete(
+  app: tauri::AppHandle,
+  id: String,
+  name: String,
+  phone: String,
+  plan: String,
+  credit_limit: f64,
+  plan_expires_at: Option<String>,
+) -> Result<(), String> {
+  if name.trim().is_empty() {
+    return Err("Name cannot be empty".to_string());
+  }
+  if credit_limit < 0.0 {
+    return Err("Credit limit cannot be negative".to_string());
+  }
+
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Check that the plan code exists in the plans table
+  let plan_exists: bool = conn
+    .query_row(
+      "SELECT COUNT(*) FROM plans WHERE code = ?1",
+      params![&plan],
+      |row| row.get::<_, i32>(0),
+    )
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !plan_exists {
+    return Err(format!("Invalid plan: {plan}"));
+  }
+
+  // Check that the athlete exists
+  let exists: bool = conn
+    .query_row(
+      "SELECT COUNT(*) FROM athletes WHERE id = ?1",
+      params![&id],
+      |row| row.get::<_, i32>(0),
+    )
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !exists {
+    return Err(format!("Athlete not found: {id}"));
+  }
+
+  let rows_affected = conn
+    .execute(
+      "UPDATE athletes SET name = ?1, phone = ?2, plan = ?3, credit_limit = ?4, plan_expires_at = ?5 WHERE id = ?6",
+      params![&name, &phone, &plan, &credit_limit, &plan_expires_at, &id],
+    )
+    .map_err(|e| e.to_string())?;
+
+  if rows_affected == 0 {
+    return Err(format!("Failed to update athlete: {id}"));
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+pub fn delete_athlete(app: tauri::AppHandle, id: String) -> Result<(), String> {
+  let mut conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Check if athlete exists
+  let exists: bool = conn
+    .query_row("SELECT COUNT(*) FROM athletes WHERE id = ?1", params![&id], |row| {
+      row.get::<_, i32>(0)
+    })
+    .map_err(|e| e.to_string())?
+    > 0;
+  if !exists {
+    return Err(format!("Athlete not found: {id}"));
+  }
+
+  // Cascade delete in transaction
+  let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+  // 1. Delete sale_items for this athlete's sales
+  let sale_items_deleted = tx
+    .execute(
+      "DELETE FROM sale_items WHERE sale_id IN (SELECT id FROM sales WHERE athlete_id = ?1)",
+      params![&id],
+    )
+    .map_err(|e| e.to_string())?;
+
+  // 2. Delete sales for this athlete
+  let sales_deleted = tx
+    .execute("DELETE FROM sales WHERE athlete_id = ?1", params![&id])
+    .map_err(|e| e.to_string())?;
+
+  // 3. Delete payments for this athlete
+  let payments_deleted = tx
+    .execute("DELETE FROM payments WHERE athlete_id = ?1", params![&id])
+    .map_err(|e| e.to_string())?;
+
+  // 4. Delete the athlete
+  let athletes_deleted = tx
+    .execute("DELETE FROM athletes WHERE id = ?1", params![&id])
+    .map_err(|e| e.to_string())?;
+
+  tx.commit().map_err(|e| e.to_string())?;
+
+  // Log the cascade delete
+  println!(
+    "Deleted athlete {}: {} sales, {} payments, {} sale_items",
+    id, sales_deleted, payments_deleted, sale_items_deleted
+  );
+
+  if athletes_deleted == 0 {
+    return Err(format!("Failed to delete athlete: {id}"));
+  }
+
+  Ok(())
+}
+
+// ─── Excel Import ────────────────────────────────────────────────────────────
+
+/// Extract a string value from a calamine Data cell.
+fn cell_to_string(cell: &Data) -> String {
+  match cell {
+    Data::String(s) => s.trim().to_string(),
+    Data::Int(i) => i.to_string(),
+    Data::Float(f) => f.to_string(),
+    Data::Bool(b) => b.to_string(),
+    Data::DateTime(dt) => dt.to_string(),
+    Data::DateTimeIso(s) => s.clone(),
+    _ => String::new(),
+  }
+}
+
+/// Parse Excel rows into ExcelRow structs with validation against known plan codes.
+fn parse_excel_rows(
+  range: &calamine::Range<Data>,
+  valid_plans: &std::collections::HashSet<String>,
+) -> Vec<ExcelRow> {
+  let mut rows_out = Vec::new();
+  // Skip header row (index 0)
+  for (idx, row) in range.rows().skip(1).enumerate() {
+    let row_number = idx + 2; // 1-indexed, +1 for header
+
+    let nombre = if row.len() > 0 { cell_to_string(&row[0]) } else { String::new() };
+    let telefono = if row.len() > 1 { cell_to_string(&row[1]) } else { String::new() };
+    let plan = if row.len() > 2 { cell_to_string(&row[2]) } else { String::new() };
+
+    // Validate
+    let (valid, error) = if nombre.trim().is_empty() {
+      (false, Some("Nombre vacío".to_string()))
+    } else if plan.trim().is_empty() {
+      (false, Some("Plan vacío".to_string()))
+    } else if !valid_plans.contains(&plan.to_uppercase()) {
+      (false, Some(format!("Plan inválido: {plan}")))
+    } else {
+      (true, None)
+    };
+
+    rows_out.push(ExcelRow {
+      row_number,
+      nombre,
+      telefono,
+      plan: plan.to_uppercase(),
+      valid,
+      error,
+    });
+  }
+  rows_out
+}
+
+#[tauri::command]
+pub fn preview_excel_athletes(app: tauri::AppHandle, file_path: String) -> Result<Vec<ExcelRow>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Load valid plan codes
+  let mut stmt = conn.prepare("SELECT code FROM plans").map_err(|e| e.to_string())?;
+  let valid_plans: std::collections::HashSet<String> = stmt
+    .query_map([], |row| row.get::<_, String>(0))
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  // Open workbook
+  let mut workbook: Xlsx<_> = open_workbook(&file_path)
+    .map_err(|e| format!("No se pudo abrir el archivo: {e}"))?;
+
+  // Get first sheet
+  let sheet_names = workbook.sheet_names();
+  if sheet_names.is_empty() {
+    return Err("El archivo no tiene hojas".to_string());
+  }
+  let first_sheet = sheet_names[0].clone();
+  let range = workbook
+    .worksheet_range(&first_sheet)
+    .map_err(|e| format!("Error leyendo hoja '{first_sheet}': {e}"))?;
+
+  Ok(parse_excel_rows(&range, &valid_plans))
+}
+
+#[tauri::command]
+pub fn import_athletes_from_excel(
+  app: tauri::AppHandle,
+  file_path: String,
+) -> Result<ImportResult, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Load valid plan codes
+  let mut stmt = conn.prepare("SELECT code FROM plans").map_err(|e| e.to_string())?;
+  let valid_plans: std::collections::HashSet<String> = stmt
+    .query_map([], |row| row.get::<_, String>(0))
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  // Open workbook
+  let mut workbook: Xlsx<_> = open_workbook(&file_path)
+    .map_err(|e| format!("No se pudo abrir el archivo: {e}"))?;
+
+  let sheet_names = workbook.sheet_names();
+  if sheet_names.is_empty() {
+    return Err("El archivo no tiene hojas".to_string());
+  }
+  let first_sheet = sheet_names[0].clone();
+  let range = workbook
+    .worksheet_range(&first_sheet)
+    .map_err(|e| format!("Error leyendo hoja '{first_sheet}': {e}"))?;
+
+  let rows = parse_excel_rows(&range, &valid_plans);
+  let total_rows = rows.len();
+  let mut imported: usize = 0;
+  let mut skipped: usize = 0;
+  let mut errors: Vec<String> = Vec::new();
+
+  for row in &rows {
+    if !row.valid {
+      skipped += 1;
+      errors.push(format!(
+        "Fila {}: {}",
+        row.row_number,
+        row.error.as_deref().unwrap_or("error desconocido")
+      ));
+      continue;
+    }
+
+    // Check duplicate name
+    let exists: bool = conn
+      .query_row(
+        "SELECT COUNT(*) FROM athletes WHERE LOWER(name) = LOWER(?1)",
+        params![&row.nombre],
+        |row| row.get::<_, i32>(0),
+      )
+      .map_err(|e| e.to_string())?
+      > 0;
+
+    if exists {
+      skipped += 1;
+      errors.push(format!("Fila {}: Atleta duplicado '{}'", row.row_number, row.nombre));
+      continue;
+    }
+
+    // Insert athlete
+    let id = uuid::Uuid::new_v4().to_string();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let plan_expires_at = chrono::Utc::now()
+      .checked_add_months(chrono::Months::new(1))
+      .map(|d| d.to_rfc3339())
+      .unwrap_or(created_at.clone());
+
+    match conn.execute(
+      "INSERT INTO athletes (id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at)
+       VALUES (?1, ?2, ?3, ?4, 'activo', 0, 150, ?5, ?6)",
+      params![&id, &row.nombre, &row.telefono, &row.plan, &plan_expires_at, &created_at],
+    ) {
+      Ok(_) => imported += 1,
+      Err(e) => {
+        skipped += 1;
+        errors.push(format!("Fila {}: Error DB: {}", row.row_number, e));
+      }
+    }
+  }
+
+  Ok(ImportResult {
+    total_rows,
+    imported,
+    skipped,
+    errors,
+  })
 }

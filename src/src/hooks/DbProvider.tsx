@@ -45,6 +45,16 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     loadData();
+    // Auto-fetch BCV rate if > 24h since last fetch (silent, non-blocking)
+    db.maybeAutoFetchBcv()
+      .then((rate) => {
+        if (rate !== null) {
+          console.log(`BCV rate auto-updated: ${rate}`);
+          // Refresh to pick up the new rate
+          loadData();
+        }
+      })
+      .catch((e) => console.warn("BCV auto-fetch failed:", e));
   }, [loadData]);
 
   return (

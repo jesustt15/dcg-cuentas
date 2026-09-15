@@ -1,10 +1,12 @@
 import { useDb } from "@/hooks/DbProvider";
 import { usd, methodLabel, methodBadgeClass } from "@/lib/db";
-import { DollarSign, Users, AlertTriangle, TrendingUp } from "lucide-react";
+import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 export default function Dashboard() {
   const { state } = useDb();
   const d = state.dashboard;
+  const navigate = useNavigate();
 
   if (!d) {
     return <div className="text-neutral-muted text-sm">Cargando...</div>;
@@ -20,6 +22,8 @@ export default function Dashboard() {
     count: planMap.get(p.code) || 0,
   }));
   const maxCount = Math.max(1, ...planDistribution.map((p) => p.count));
+
+  const planName = (code: string) => state.plans.find((p) => p.code === code)?.name || code;
 
   return (
     <div className="space-y-8 max-w-6xl">
@@ -79,6 +83,69 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* EXPIRING PLANS PANEL */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <AlertCircle className="w-5 h-5 text-gold" />
+          <h3 className="text-xl font-bold font-heading text-gold tracking-tight">
+            Planes por Vencer
+          </h3>
+        </div>
+        {d.expiring_athletes.length === 0 ? (
+          <div className="bg-[#121215] border border-divider rounded p-6">
+            <p className="text-neutral-muted italic text-sm text-center py-2">
+              No hay planes por vencer en los pr&oacute;ximos 3 d&iacute;as
+            </p>
+          </div>
+        ) : (
+          <div className="bg-[#121215] border border-divider rounded overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-divider">
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Nombre</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Plan</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Vence</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Estado</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.expiring_athletes.map((a) => {
+                  const badge = getExpiryBadge(a.plan_expires_at);
+                  const rowBg =
+                    badge.kind === "expired"
+                      ? "bg-status-error/5 hover:bg-status-error/10"
+                      : badge.kind === "today"
+                        ? "bg-gold/5 hover:bg-gold/10"
+                        : "hover:bg-surface-low/50";
+                  return (
+                    <tr
+                      key={a.id}
+                      className={`border-b border-divider last:border-0 cursor-pointer transition-colors ${rowBg}`}
+                      onClick={() => navigate(`/athletes/${a.id}`)}
+                    >
+                      <td className="px-5 py-3 text-sm text-neutral font-medium">{a.name}</td>
+                      <td className="px-5 py-3">
+                        <span className="uppercase-label px-2 py-1 rounded bg-surface-high text-gold">
+                          {planName(a.plan)}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-sm text-neutral-muted font-mono">
+                        {formatExpiryDate(a.plan_expires_at)}
+                      </td>
+                      <td className="px-5 py-3">
+                        <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${badge.className}`}>
+                          {badge.label}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* TWO-COL: Recent Sales + Plan Distribution */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Recent Sales */}
@@ -102,7 +169,7 @@ export default function Dashboard() {
                       <span className="uppercase-label text-neutral-muted">
                         {formatTimeAgo(sale.created_at)}
                       </span>
-                      <span className="text-neutral-muted">·</span>
+                      <span className="text-neutral-muted">&middot;</span>
                       <span className="text-neutral-muted">{sale.item_count} items</span>
                     </div>
                   </div>
@@ -145,6 +212,32 @@ export default function Dashboard() {
       </div>
     </div>
   );
+}
+
+function getExpiryBadge(expiresAt: string | null): { label: string; className: string; kind: "expired" | "today" | "upcoming" } {
+  if (!expiresAt) return { label: "Sin fecha", className: "bg-surface-high text-neutral-muted", kind: "upcoming" };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(expiresAt + "T00:00:00");
+  const diffDays = Math.round((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return { label: "Vencido", className: "bg-status-error/20 text-status-error", kind: "expired" };
+  }
+  if (diffDays === 0) {
+    return { label: "Vence hoy", className: "bg-gold/20 text-gold", kind: "today" };
+  }
+  return {
+    label: `Vence en ${diffDays} d&iacute;a${diffDays !== 1 ? "s" : ""}`,
+    className: "bg-surface-high text-neutral",
+    kind: "upcoming",
+  };
+}
+
+function formatExpiryDate(expiresAt: string | null): string {
+  if (!expiresAt) return "—";
+  const d = new Date(expiresAt + "T00:00:00");
+  return d.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
 }
 
 function formatTimeAgo(dateStr: string): string {

@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useDb } from "@/hooks/DbProvider";
-import { db, usd, formatBs } from "@/lib/db";
+import { db, usd, formatBs, productImageUrl } from "@/lib/db";
 import type { Product } from "@/types";
-import { Search, Plus, Minus, X, ShoppingCart, Check } from "lucide-react";
+import { Search, Plus, Minus, X, ShoppingCart, Check, Package } from "lucide-react";
 
-type PaymentMethod = "efectivo" | "zelle" | "cuenta" | "pago_movil";
+type PaymentMethod = "efectivo" | "cuenta" | "pago_movil";
 type Category = "all" | "ropa" | "suplementos" | "implementos" | "bebidas";
 
 interface CartItem {
@@ -24,12 +24,44 @@ export default function POS() {
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
+  const [athleteSearch, setAthleteSearch] = useState("");
+  const [showAthleteDropdown, setShowAthleteDropdown] = useState(false);
+  const athleteComboRef = useRef<HTMLDivElement>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [imgErrors, setImgErrors] = useState<Set<string>>(new Set());
+
+  // Build image URLs for all products that have images
+  useEffect(() => {
+    async function buildUrls() {
+      const urls: Record<string, string> = {};
+      for (const p of state.products) {
+        if (p.image_path) {
+          const url = await productImageUrl(p.image_path);
+          if (url) urls[p.id] = url;
+        }
+      }
+      setImageUrls(urls);
+    }
+    buildUrls();
+  }, [state.products]);
 
   const filteredProducts = state.products.filter((p) => {
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
     const matchCat = category === "all" || p.category === category;
     return matchSearch && matchCat;
   });
+
+  const activeAthletes = state.athletes.filter((a) => a.status === "activo");
+
+  const filteredAthletes = activeAthletes.filter(
+    (a) =>
+      athleteSearch === "" ||
+      a.name.toLowerCase().includes(athleteSearch.toLowerCase()),
+  );
+
+  const selectedAthlete = athleteId
+    ? state.athletes.find((a) => a.id === athleteId) ?? null
+    : null;
 
   const subtotal = cart.reduce((sum, item) => sum + item.qty * item.unitPrice, 0);
 
@@ -65,6 +97,41 @@ export default function POS() {
     setCart((prev) => prev.filter((i) => i.productId !== productId));
   };
 
+  const selectAthlete = (id: string, name: string) => {
+    setAthleteId(id);
+    setAthleteSearch(name);
+    setShowAthleteDropdown(false);
+  };
+
+  const clearAthlete = () => {
+    setAthleteId("");
+    setAthleteSearch("");
+    setShowAthleteDropdown(false);
+  };
+
+  const handleAthleteInputBlur = () => {
+    setTimeout(() => {
+      if (
+        athleteComboRef.current &&
+        !athleteComboRef.current.contains(document.activeElement)
+      ) {
+        setShowAthleteDropdown(false);
+      }
+    }, 150);
+  };
+
+  const handleAthleteInputChange = (val: string) => {
+    setAthleteSearch(val);
+    setShowAthleteDropdown(true);
+    // Clear selection when search diverges from selected athlete name
+    if (selectedAthlete && val !== selectedAthlete.name) {
+      setAthleteId("");
+    }
+    if (val === "") {
+      setAthleteId("");
+    }
+  };
+
   const confirmSale = async () => {
     if (cart.length === 0) return;
     if (paymentMethod === "cuenta" && !athleteId) {
@@ -81,6 +148,7 @@ export default function POS() {
       );
       setCart([]);
       setAthleteId("");
+      setAthleteSearch("");
       setPaymentMethod("efectivo");
       setSuccess(true);
       refresh();
@@ -146,21 +214,39 @@ export default function POS() {
         <div className="flex-1 overflow-auto grid grid-cols-2 lg:grid-cols-3 gap-3 content-start">
           {filteredProducts.map((p) => {
             const outOfStock = p.stock <= 0;
+            const pImgUrl = imageUrls[p.id] || null;
+            const showImg = pImgUrl && !imgErrors.has(p.id);
             return (
               <div
                 key={p.id}
-                className={`bg-[#121215] border border-divider rounded p-4 flex flex-col ${
+                className={`bg-[#121215] border border-divider rounded p-3 flex flex-col ${
                   outOfStock ? "opacity-40" : "hover:border-gold/60"
                 } transition-colors`}
               >
-                <div className="flex items-start justify-between mb-2">
-                  <span className="text-sm text-neutral font-medium leading-tight">{p.name}</span>
-                  <span className="uppercase-label px-1.5 py-0.5 rounded bg-surface-high text-neutral-muted shrink-0 ml-2">
+                {/* Image thumbnail */}
+                <div className="w-full aspect-square rounded bg-neutral-800 overflow-hidden mb-2 shrink-0">
+                  {showImg ? (
+                    <img
+                      src={pImgUrl}
+                      alt={p.name}
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      onError={() => setImgErrors((prev) => new Set(prev).add(p.id))}
+                    />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-neutral-muted">
+                      <Package className="w-6 h-6" />
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-start justify-between mb-1">
+                  <span className="text-sm text-neutral font-medium leading-tight line-clamp-2">{p.name}</span>
+                  <span className="uppercase-label px-1.5 py-0.5 rounded bg-surface-high text-neutral-muted shrink-0 ml-2 text-[9px]">
                     {p.category}
                   </span>
                 </div>
                 <div className="flex items-center justify-between mt-auto">
-                  <span className="font-mono font-bold text-lg text-gold">{usd(p.price)}</span>
+                  <span className="font-mono font-bold text-base text-gold">{usd(p.price)}</span>
                   <span
                     className={`text-xs font-mono ${
                       p.stock <= p.min_stock ? "text-status-error" : "text-neutral-muted"
@@ -172,7 +258,7 @@ export default function POS() {
                 <button
                   onClick={() => addToCart(p)}
                   disabled={outOfStock}
-                  className="mt-3 w-full py-1.5 text-xs font-bold uppercase rounded bg-surface-high border border-border text-neutral hover:border-gold hover:text-gold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="mt-2 w-full py-1.5 text-xs font-bold uppercase rounded bg-surface-high border border-border text-neutral hover:border-gold hover:text-gold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {outOfStock ? "Sin Stock" : "+ Agregar"}
                 </button>
@@ -192,23 +278,132 @@ export default function POS() {
             </h3>
           </div>
 
-          {/* Athlete Selector */}
+          {/* Athlete Selector — Searchable Combobox */}
           <div className="mb-3">
-            <label className="uppercase-label text-neutral-muted block mb-1.5">Atleta</label>
-            <select
-              value={athleteId}
-              onChange={(e) => setAthleteId(e.target.value)}
-              className="w-full bg-[#0F0F12] border border-divider text-neutral rounded px-3 py-2 focus:border-gold focus:outline-none text-sm"
-            >
-              <option value="">Venta mostrador</option>
-              {state.athletes
-                .filter((a) => a.status === "activo")
-                .map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                  </option>
-                ))}
-            </select>
+            <label className="uppercase-label text-neutral-muted block mb-1.5">
+              Atleta
+            </label>
+            <div ref={athleteComboRef} className="relative">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-muted pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder={athleteId ? "" : "Venta mostrador"}
+                  value={athleteSearch}
+                  onChange={(e) => handleAthleteInputChange(e.target.value)}
+                  onFocus={() => setShowAthleteDropdown(true)}
+                  onBlur={handleAthleteInputBlur}
+                  className="w-full bg-[#0F0F12] border border-divider text-neutral rounded pl-10 pr-8 py-2 focus:border-gold focus:outline-none text-sm placeholder:text-neutral-muted"
+                />
+                {athleteSearch && (
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      clearAthlete();
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded hover:bg-surface-high text-neutral-muted hover:text-neutral transition-colors"
+                    tabIndex={-1}
+                    aria-label="Limpiar atleta"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Filtered dropdown */}
+              {showAthleteDropdown && (
+                <div className="absolute z-50 w-full mt-1 bg-[#121215] border border-divider rounded-lg shadow-lg max-h-[220px] overflow-y-auto">
+                  {activeAthletes.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-xs text-neutral-muted">
+                      No hay atletas activos
+                    </div>
+                  ) : filteredAthletes.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-xs text-neutral-muted">
+                      No se encontraron atletas
+                    </div>
+                  ) : (
+                    <>
+                      {athleteSearch === "" && (
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectAthlete("", "");
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm text-neutral-muted hover:bg-gold/10 transition-colors border-b border-divider"
+                        >
+                          Venta mostrador
+                        </button>
+                      )}
+                      {filteredAthletes.map((a) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectAthlete(a.id, a.name);
+                          }}
+                          className={`w-full px-3 py-2 text-left hover:bg-gold/10 transition-colors flex items-center justify-between gap-2 ${
+                            athleteId === a.id ? "bg-gold/5" : ""
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-medium text-neutral truncate">
+                              {a.name}
+                            </div>
+                            <div className="text-xs text-neutral-muted">
+                              {a.plan}
+                            </div>
+                          </div>
+                          <span
+                            className={`font-mono text-xs shrink-0 ${
+                              a.balance > 0
+                                ? "text-status-error"
+                                : "text-neutral-muted"
+                            }`}
+                          >
+                            {usd(a.balance)}
+                          </span>
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Selected athlete info */}
+            {selectedAthlete && (
+              <div className="flex items-center justify-between mt-1.5 px-1">
+                <span className="text-xs text-neutral-muted truncate">
+                  Atleta:{" "}
+                  <span className="text-neutral">{selectedAthlete.name}</span>
+                  {" · "}
+                  Plan:{" "}
+                  <span className="text-neutral">{selectedAthlete.plan}</span>
+                  {" · "}
+                  Saldo:{" "}
+                  <span
+                    className={
+                      selectedAthlete.balance > 0
+                        ? "text-status-error"
+                        : "text-neutral"
+                    }
+                  >
+                    {usd(selectedAthlete.balance)}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={clearAthlete}
+                  className="p-0.5 rounded hover:bg-surface-high text-neutral-muted hover:text-neutral shrink-0 ml-2 transition-colors"
+                  title="Quitar atleta"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -285,8 +480,8 @@ export default function POS() {
           {/* Payment Method */}
           <div>
             <label className="uppercase-label text-neutral-muted block mb-2">Método de Pago</label>
-            <div className="grid grid-cols-4 gap-2">
-              {(["efectivo", "zelle", "cuenta", "pago_movil"] as PaymentMethod[]).map((m) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(["efectivo", "cuenta", "pago_movil"] as PaymentMethod[]).map((m) => (
                 <button
                   key={m}
                   onClick={() => setPaymentMethod(m)}

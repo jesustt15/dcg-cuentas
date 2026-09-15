@@ -1,11 +1,85 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useDb } from "@/hooks/DbProvider";
-import { db, usd } from "@/lib/db";
-import { Plus } from "lucide-react";
+import { db, productImageUrl } from "@/lib/db";
+import { Plus, Trash2, Pencil, Package, Camera, Loader2 } from "lucide-react";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import EditProductModal from "@/components/EditProductModal";
+import type { Product } from "@/types";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
+
+// Allowed image extensions for the file picker
+const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
 
 export default function Products() {
   const { state, refresh } = useDb();
   const [showForm, setShowForm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<{ isOpen: boolean; product: Product | null }>({
+    isOpen: false,
+    product: null,
+  });
+  const [deleting, setDeleting] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+
+  // Build image URLs for all products that have images
+  useEffect(() => {
+    async function buildUrls() {
+      const urls: Record<string, string> = {};
+      for (const p of state.products) {
+        if (p.image_path) {
+          const url = await productImageUrl(p.image_path);
+          if (url) urls[p.id] = url;
+        }
+      }
+      setImageUrls(urls);
+    }
+    buildUrls();
+  }, [state.products]);
+
+  const handleDelete = async () => {
+    if (!deleteConfirm.product) return;
+    setDeleting(true);
+    try {
+      await db.deleteProduct(deleteConfirm.product.id);
+      setDeleteConfirm({ isOpen: false, product: null });
+      refresh();
+    } catch (err) {
+      alert(String(err));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleUploadImage = useCallback(async (productId: string) => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: "Images", extensions: IMAGE_EXTENSIONS }],
+        title: "Seleccionar imagen del producto",
+      });
+      if (!selected || typeof selected !== "string") return;
+
+      setUploadingId(productId);
+
+      // Read file bytes
+      const bytes = await readFile(selected);
+
+      // Extract extension from filename
+      const ext = selected.split(".").pop()?.toLowerCase() || "jpg";
+
+      // Upload to backend
+      await db.uploadProductImage(productId, Array.from(bytes), ext);
+
+      // Refresh to get updated product data and rebuild URLs
+      refresh();
+    } catch (err) {
+      alert(String(err));
+    } finally {
+      setUploadingId(null);
+    }
+  }, [refresh]);
 
   return (
     <div className="space-y-6 max-w-6xl">
@@ -39,70 +113,168 @@ export default function Products() {
         />
       )}
 
-      {/* TABLE */}
+      {/* CARD GRID */}
       {state.products.length === 0 ? (
         <div className="text-center py-16 border border-divider rounded bg-surface-low">
           <p className="text-neutral-muted text-sm">No hay productos registrados</p>
         </div>
       ) : (
-        <div className="bg-[#121215] border border-divider rounded overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-divider">
-                <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Nombre</th>
-                <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Categoría</th>
-                <th className="text-right px-5 py-3 uppercase-label text-neutral-muted">Precio</th>
-                <th className="text-right px-5 py-3 uppercase-label text-neutral-muted">Costo</th>
-                <th className="text-right px-5 py-3 uppercase-label text-neutral-muted">Stock</th>
-                <th className="text-right px-5 py-3 uppercase-label text-neutral-muted">Mín.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {state.products.map((p) => {
-                const lowStock = p.stock <= p.min_stock;
-                return (
-                  <tr key={p.id} className="border-b border-divider last:border-0">
-                    <td className="px-5 py-3 text-sm text-neutral font-medium">{p.name}</td>
-                    <td className="px-5 py-3">
-                      <span className="uppercase-label px-2 py-1 rounded bg-surface-high text-neutral-subtle">
-                        {p.category}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono text-sm text-neutral">
-                      {usd(p.price)}
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono text-sm text-neutral-muted">
-                      {usd(p.cost)}
-                    </td>
-                    <td className="px-5 py-3 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <span
-                          className={`font-mono text-sm ${
-                            lowStock ? "text-status-error" : "text-neutral"
-                          }`}
-                        >
-                          {p.stock}
-                        </span>
-                        {lowStock && (
-                          <span className="uppercase-label px-1.5 py-0.5 rounded bg-status-error/15 text-status-error">
-                            REORDEN
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-5 py-3 text-right font-mono text-sm text-neutral-muted">
-                      {p.min_stock}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {state.products.map((p) => {
+            const lowStock = p.stock <= p.min_stock;
+            const isUploading = uploadingId === p.id;
+            return (
+              <ProductCard
+                key={p.id}
+                product={p}
+                imageUrl={imageUrls[p.id] || null}
+                isUploading={isUploading}
+                lowStock={lowStock}
+                onUploadImage={() => handleUploadImage(p.id)}
+                onEdit={() => setEditingProduct(p)}
+                onDelete={() => setDeleteConfirm({ isOpen: true, product: p })}
+              />
+            );
+          })}
         </div>
       )}
+
+      {/* DELETE CONFIRMATION */}
+      <ConfirmDialog
+        isOpen={deleteConfirm.isOpen}
+        onClose={() => setDeleteConfirm({ isOpen: false, product: null })}
+        onConfirm={handleDelete}
+        title="Eliminar producto"
+        message={
+          deleteConfirm.product
+            ? `¿Estás seguro de que quieres eliminar "${deleteConfirm.product.name}"? Esta acción no se puede deshacer.`
+            : ""
+        }
+        confirmLabel="Eliminar"
+        variant="danger"
+        loading={deleting}
+      />
+
+      {/* EDIT PRODUCT MODAL */}
+      <EditProductModal
+        isOpen={editingProduct !== null}
+        onClose={() => setEditingProduct(null)}
+        product={editingProduct}
+        onSave={refresh}
+      />
     </div>
   );
 }
+
+// ─── Product Card ────────────────────────────────────────────────────────────
+
+function ProductCard({
+  product,
+  imageUrl,
+  isUploading,
+  lowStock,
+  onUploadImage,
+  onEdit,
+  onDelete,
+}: {
+  product: Product;
+  imageUrl: string | null;
+  isUploading: boolean;
+  lowStock: boolean;
+  onUploadImage: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const [imgError, setImgError] = useState(false);
+  const showImg = imageUrl && !imgError;
+
+  // Reset error state when image URL changes (e.g., after re-upload)
+  useEffect(() => setImgError(false), [imageUrl]);
+
+  return (
+    <div className="bg-surface-high border border-divider rounded-xl overflow-hidden flex flex-col group">
+      {/* IMAGE AREA */}
+      <div className="relative aspect-square bg-neutral-800 overflow-hidden">
+        {showImg ? (
+          <img
+            src={imageUrl}
+            alt={product.name}
+            className="w-full h-full object-cover"
+            loading="lazy"
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center text-neutral-muted gap-2">
+            <Package className="w-8 h-8" />
+            <span className="text-xs uppercase-label">Sin imagen</span>
+          </div>
+        )}
+
+        {/* Upload overlay */}
+        <button
+          onClick={onUploadImage}
+          disabled={isUploading}
+          className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 disabled:opacity-50 cursor-pointer"
+          title="Cambiar imagen"
+          aria-label={`Cambiar imagen de ${product.name}`}
+        >
+          {isUploading ? (
+            <Loader2 className="w-6 h-6 text-gold animate-spin" />
+          ) : (
+            <Camera className="w-6 h-6 text-neutral" />
+          )}
+        </button>
+
+        {/* Low stock badge */}
+        {lowStock && (
+          <span className="absolute top-2 left-2 uppercase-label px-1.5 py-0.5 rounded bg-status-error/90 text-white text-[10px]">
+            Reorden
+          </span>
+        )}
+      </div>
+
+      {/* CONTENT */}
+      <div className="p-3 flex flex-col flex-1 gap-1.5">
+        <h3 className="text-sm font-heading font-bold text-neutral leading-tight line-clamp-2">
+          {product.name}
+        </h3>
+        <span className="uppercase-label px-1.5 py-0.5 rounded bg-surface-highest text-neutral-subtle text-[10px] w-fit">
+          {product.category}
+        </span>
+        <div className="flex items-baseline justify-between mt-auto pt-1">
+          <span className="font-mono text-sm text-gold font-bold">
+            ${product.price.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          </span>
+          <span className="font-mono text-xs text-neutral-muted">
+            Stock: {product.stock}
+          </span>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1 pt-2 border-t border-divider mt-1">
+          <button
+            onClick={onEdit}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-muted hover:text-gold transition-colors rounded hover:bg-gold/10"
+            title="Editar"
+          >
+            <Pencil className="w-3 h-3" />
+            Editar
+          </button>
+          <button
+            onClick={onDelete}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 text-[10px] font-bold uppercase tracking-wider text-neutral-muted hover:text-status-error transition-colors rounded hover:bg-status-error/10"
+            title="Eliminar"
+          >
+            <Trash2 className="w-3 h-3" />
+            Eliminar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Create Form ─────────────────────────────────────────────────────────────
 
 function CreateForm({
   onClose,

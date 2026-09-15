@@ -12,6 +12,7 @@ export interface Athlete {
   status: "activo" | "suspendido";
   balance: number;
   credit_limit: number;
+  plan_expires_at: string | null;
   created_at: string;
 }
 
@@ -23,6 +24,7 @@ export interface Product {
   cost: number;
   stock: number;
   min_stock: number;
+  image_path: string | null;
 }
 
 export interface Sale {
@@ -31,7 +33,7 @@ export interface Sale {
   athlete_name: string | null;
   subtotal: number;
   total: number;
-  payment_method: "efectivo" | "zelle" | "cuenta" | "pago_movil";
+  payment_method: "efectivo" | "cuenta" | "pago_movil";
   created_at: string;
   item_count: number;
 }
@@ -55,7 +57,7 @@ export interface Payment {
   id: string;
   athlete_id: string;
   amount: number;
-  method: "efectivo" | "zelle" | "pago_movil";
+  method: "efectivo" | "pago_movil";
   created_at: string;
 }
 
@@ -66,6 +68,23 @@ export interface DashboardStats {
   total_debt: number;
   low_stock_count: number;
   recent_sales: Sale[];
+  expiring_athletes: Athlete[];
+}
+
+export interface ImportResult {
+  total_rows: number;
+  imported: number;
+  skipped: number;
+  errors: string[];
+}
+
+export interface ExcelRow {
+  row_number: number;
+  nombre: string;
+  telefono: string;
+  plan: string;
+  valid: boolean;
+  error: string | null;
 }
 
 export interface DatabaseState {
