@@ -80,6 +80,33 @@ pub struct DashboardStats {
   pub expiring_athletes: Vec<Athlete>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SalesChartPoint {
+  pub day: String,
+  pub total: f64,
+  pub count: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CXCAging {
+  pub current: f64,
+  pub days_31_60: f64,
+  pub days_61_90: f64,
+  pub over_90: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DebtorRow {
+  pub id: String,
+  pub name: String,
+  pub phone: String,
+  pub plan: String,
+  pub balance: f64,
+  pub credit_limit: f64,
+  pub days_overdue: i32,
+  pub last_payment_date: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct SaleItemInput {
   pub product_id: String,
@@ -1095,6 +1122,163 @@ pub fn get_dashboard(app: tauri::AppHandle) -> Result<DashboardStats, String> {
     recent_sales,
     expiring_athletes,
   })
+}
+
+#[tauri::command]
+pub fn get_sales_period(app: tauri::AppHandle, period: String) -> Result<f64, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let range = match period.as_str() {
+    "week" => "-7 days",
+    "month" => "-1 month",
+    "year" => "-1 year",
+    _ => return Err(format!("Unknown period: {}", period)),
+  };
+
+  let total: f64 = conn
+    .query_row(
+      "SELECT COALESCE(SUM(total), 0) FROM sales WHERE DATE(created_at) >= DATE('now', ?1)",
+      [&range],
+      |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())?;
+
+  Ok(total)
+}
+
+#[tauri::command]
+pub fn get_sales_chart_data(app: tauri::AppHandle) -> Result<Vec<SalesChartPoint>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let mut stmt = conn
+    .prepare(
+      "SELECT DATE(created_at) as day, SUM(total) as total, COUNT(*) as count
+       FROM sales
+       WHERE DATE(created_at) >= DATE('now', '-30 days')
+       GROUP BY DATE(created_at)
+       ORDER BY day ASC",
+    )
+    .map_err(|e| e.to_string())?;
+
+  let points: Vec<SalesChartPoint> = stmt
+    .query_map([], |row| {
+      Ok(SalesChartPoint {
+        day: row.get(0)?,
+        total: row.get(1)?,
+        count: row.get(2)?,
+      })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  Ok(points)
+}
+
+#[tauri::command]
+pub fn get_cxc_aging(app: tauri::AppHandle) -> Result<CXCAging, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let mut stmt = conn
+    .prepare(
+      "SELECT balance, julianday('now') - julianday(created_at) as days
+       FROM athletes WHERE balance > 0",
+    )
+    .map_err(|e| e.to_string())?;
+
+  let mut aging = CXCAging {
+    current: 0.0,
+    days_31_60: 0.0,
+    days_61_90: 0.0,
+    over_90: 0.0,
+  };
+
+  let rows = stmt
+    .query_map([], |row| {
+      Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?))
+    })
+    .map_err(|e| e.to_string())?;
+
+  for row in rows {
+    let (balance, days) = row.map_err(|e| e.to_string())?;
+    let days = days as i64;
+    if days <= 30 {
+      aging.current += balance;
+    } else if days <= 60 {
+      aging.days_31_60 += balance;
+    } else if days <= 90 {
+      aging.days_61_90 += balance;
+    } else {
+      aging.over_90 += balance;
+    }
+  }
+
+  Ok(aging)
+}
+
+#[tauri::command]
+pub fn get_debtors_detailed(app: tauri::AppHandle) -> Result<Vec<DebtorRow>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let mut stmt = conn
+    .prepare(
+      "SELECT a.id, a.name, a.phone, a.plan, a.balance, a.credit_limit, a.plan_expires_at, a.created_at,
+              (SELECT MAX(created_at) FROM payments p WHERE p.athlete_id = a.id) as last_payment_date
+       FROM athletes a
+       WHERE a.balance > 0
+       ORDER BY a.balance DESC",
+    )
+    .map_err(|e| e.to_string())?;
+
+  let rows: Vec<DebtorRow> = stmt
+    .query_map([], |row| {
+      let id: String = row.get(0)?;
+      let name: String = row.get(1)?;
+      let phone: String = row.get(2)?;
+      let plan: String = row.get(3)?;
+      let balance: f64 = row.get(4)?;
+      let credit_limit: f64 = row.get(5)?;
+      let plan_expires_at: Option<String> = row.get(6)?;
+      let _created_at: String = row.get(7)?;
+      let last_payment_date: Option<String> = row.get(8)?;
+
+      // Calculate days overdue: if plan_expires_at exists and is past
+      let days_overdue = match &plan_expires_at {
+        Some(expires) => {
+          // Parse date and calculate days since expiry
+          let exp_date = chrono::NaiveDate::parse_from_str(expires, "%Y-%m-%d").ok();
+          match exp_date {
+            Some(ed) => {
+              let today = chrono::Utc::now().date_naive();
+              let diff = (today - ed).num_days();
+              if diff > 0 { diff as i32 } else { 0 }
+            }
+            None => 0,
+          }
+        }
+        None => 0,
+      };
+
+      Ok(DebtorRow {
+        id,
+        name,
+        phone,
+        plan,
+        balance,
+        credit_limit,
+        days_overdue,
+        last_payment_date,
+      })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  Ok(rows)
 }
 
 #[tauri::command]

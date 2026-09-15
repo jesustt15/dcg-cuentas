@@ -10,6 +10,12 @@ const initialState: DatabaseState = {
   dashboard: null,
   usdVes: 36.5,
   pendingReminders: [],
+  weekSalesTotal: 0,
+  monthSalesTotal: 0,
+  yearSalesTotal: 0,
+  salesChart: [],
+  cxcAging: { current: 0, days_31_60: 0, days_61_90: 0, over_90: 0 },
+  debtors: [],
   loading: true,
   error: null,
 };
@@ -26,7 +32,7 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const loadData = useCallback(async () => {
     try {
       await db.init();
-      const [plans, athletes, products, sales, dashboard, usdVes, pendingReminders] = await Promise.all([
+      const [plans, athletes, products, sales, dashboard, usdVes, pendingReminders, weekSalesTotal, monthSalesTotal, yearSalesTotal, salesChart, cxcAging, debtors] = await Promise.all([
         db.getPlans(),
         db.getAthletes(),
         db.getProducts(),
@@ -34,8 +40,14 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
         db.getDashboard(),
         db.getUsdVes(),
         db.getPendingReminders(),
+        db.getSalesPeriod("week"),
+        db.getSalesPeriod("month"),
+        db.getSalesPeriod("year"),
+        db.getSalesChartData(),
+        db.getCXCAging(),
+        db.getDebtorsDetailed(),
       ]);
-      setState({ plans, athletes, products, sales, dashboard, usdVes, pendingReminders, loading: false, error: null });
+      setState({ plans, athletes, products, sales, dashboard, usdVes, pendingReminders, weekSalesTotal, monthSalesTotal, yearSalesTotal, salesChart, cxcAging, debtors, loading: false, error: null });
     } catch (e) {
       setState((s) => ({
         ...s,

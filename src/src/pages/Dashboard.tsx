@@ -8,6 +8,8 @@ import { normalizeVePhone, buildWaLink } from "@/lib/phone";
 import { renderReminder } from "@/lib/reminder";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReminderSettingsModal from "@/components/ReminderSettingsModal";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import type { DebtorRow } from "@/types";
 
 export default function Dashboard() {
   const { state, refresh } = useDb();
@@ -34,7 +36,7 @@ export default function Dashboard() {
   const planName = (code: string) => state.plans.find((p) => p.code === code)?.name || code;
 
   return (
-    <div className="space-y-8 max-w-6xl">
+    <div className="space-y-8 max-w-7xl">
       {/* HEADER */}
       <div className="flex items-end justify-between">
         <div>
@@ -59,7 +61,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         <MetricCard
           label="Ventas Hoy"
           value={usd(d.today_sales_total)}
@@ -68,27 +70,160 @@ export default function Dashboard() {
           accent="bg-status-success"
         />
         <MetricCard
-          label="Atletas Activos"
-          value={String(d.active_athletes)}
-          sub={`${state.athletes.length} total`}
-          icon={<Users className="w-4 h-4" />}
-          accent="bg-gold"
+          label="Esta Semana"
+          value={usd(state.weekSalesTotal)}
+          icon={<TrendingUp className="w-4 h-4" />}
+          accent="bg-status-success"
         />
         <MetricCard
-          label="Deuda Total"
+          label="Este Mes"
+          value={usd(state.monthSalesTotal)}
+          icon={<TrendingUp className="w-4 h-4" />}
+          accent="bg-status-success"
+        />
+        <MetricCard
+          label="Este Año"
+          value={usd(state.yearSalesTotal)}
+          icon={<TrendingUp className="w-4 h-4" />}
+          accent="bg-status-success"
+        />
+        <MetricCard
+          label="CXC Total"
           value={usd(d.total_debt)}
           sub="saldos pendientes"
-          icon={<TrendingUp className="w-4 h-4" />}
+          icon={<AlertTriangle className="w-4 h-4" />}
           accent="border-t-2 border-t-gold"
           special
         />
         <MetricCard
-          label="Stock Bajo"
-          value={String(d.low_stock_count)}
-          sub="productos a reordenar"
-          icon={<AlertTriangle className="w-4 h-4" />}
-          accent={d.low_stock_count > 0 ? "bg-status-error" : "bg-neutral-muted"}
+          label="Deudores"
+          value={String(state.debtors.length)}
+          sub={`${state.athletes.length} total`}
+          icon={<Users className="w-4 h-4" />}
+          accent="bg-gold"
         />
+      </div>
+
+      {/* SALES CHART + CXC AGING */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Sales chart: last 30 days */}
+        <div className="bg-[#121215] border border-divider rounded p-5">
+          <h3 className="uppercase-label text-neutral-muted mb-4">Ventas últimas 30 días</h3>
+          <ResponsiveContainer width="100%" height={250}>
+            <AreaChart data={state.salesChart}>
+              <defs>
+                <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#D4AF37" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="#D4AF37" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
+              <Area type="monotone" dataKey="total" stroke="#D4AF37" fill="url(#goldGrad)" strokeWidth={2} />
+              <XAxis dataKey="day" tickFormatter={(d: string) => d.slice(5)} tick={{ fontSize: 10, fill: "#888" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: "#888" }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${v}`} />
+              <Tooltip
+                contentStyle={{ backgroundColor: "#1a1a1a", border: "1px solid #333", borderRadius: "8px", fontSize: "12px" }}
+                labelStyle={{ color: "#888" }}
+                formatter={(value: unknown) => [usd(Number(value)), "Total"]}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* CXC por antigüedad */}
+        <div className="bg-[#121215] border border-divider rounded p-5">
+          <h3 className="uppercase-label text-neutral-muted mb-4">CXC por Antigüedad</h3>
+          {(() => {
+            const cxc = state.cxcAging;
+            const total = cxc.current + cxc.days_31_60 + cxc.days_61_90 + cxc.over_90;
+            return (
+              <div className="space-y-4 mt-2">
+                <AgingBar label="0-30 días" value={cxc.current} total={total} color="bg-status-success" />
+                <AgingBar label="31-60 días" value={cxc.days_31_60} total={total} color="bg-gold" />
+                <AgingBar label="61-90 días" value={cxc.days_61_90} total={total} color="bg-orange-500" />
+                <AgingBar label="90+ días" value={cxc.over_90} total={total} color="bg-status-error" />
+                {total === 0 && (
+                  <p className="text-neutral-muted italic text-sm text-center py-2">No hay cuentas por cobrar</p>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* CUENTAS POR COBRAR */}
+      <div>
+        <h3 className="text-lg font-bold font-heading text-neutral tracking-tight mb-4">
+          Cuentas por Cobrar
+        </h3>
+        {state.debtors.length === 0 ? (
+          <div className="bg-[#121215] border border-divider rounded p-6">
+            <p className="text-neutral-muted italic text-sm text-center py-2">
+              No hay cuentas por cobrar
+            </p>
+          </div>
+        ) : (
+          <div className="bg-[#121215] border border-divider rounded overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-divider">
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Nombre</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Teléfono</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Plan</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Deuda</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Días Vencido</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Último Pago</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Acción</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.debtors.map((debtor: DebtorRow) => (
+                  <tr
+                    key={debtor.id}
+                    onClick={() => navigate(`/athletes/${debtor.id}`)}
+                    className="border-b border-divider last:border-0 cursor-pointer hover:bg-surface-high/50 transition-colors"
+                  >
+                    <td className="px-5 py-3 text-sm text-neutral font-medium">{debtor.name}</td>
+                    <td className="px-5 py-3 text-sm text-neutral-muted">{debtor.phone || "—"}</td>
+                    <td className="px-5 py-3">
+                      <span className="uppercase-label px-2 py-1 rounded bg-surface-high text-gold">
+                        {state.plans.find((p) => p.code === debtor.plan)?.name || debtor.plan}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 font-mono text-sm text-status-error font-semibold">
+                      {usd(debtor.balance)}
+                    </td>
+                    <td className="px-5 py-3 text-sm text-neutral-muted">
+                      {debtor.days_overdue > 0 ? (
+                        <span className="text-status-error font-semibold">{debtor.days_overdue}d</span>
+                      ) : "—"}
+                    </td>
+                    <td className="px-5 py-3 text-sm text-neutral-muted">
+                      {debtor.last_payment_date ? formatDate(debtor.last_payment_date) : "Sin pagos"}
+                    </td>
+                    <td className="px-5 py-3">
+                      {debtor.phone && normalizeVePhone(debtor.phone) && (
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const phone = normalizeVePhone(debtor.phone)!;
+                            const plan = state.plans.find((p) => p.code === debtor.plan);
+                            const message = `Hola ${debtor.name}! Te recordamos que tienes un saldo pendiente de ${usd(debtor.balance)} ${plan?.name ? `en tu plan ${plan.name}` : ""}. ¿Podrías realizar tu pago? Gracias!`;
+                            await openUrl(buildWaLink(phone, message));
+                          }}
+                          className="p-2 rounded-lg bg-green-600/20 hover:bg-green-600/30 text-green-400 transition-colors"
+                          title="Enviar recordatorio por WhatsApp"
+                        >
+                          <MessageCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* PENDING REMINDERS BANNER */}
@@ -515,4 +650,24 @@ function BatchSendModal({
       </div>
     </div>
   );
+}
+
+function AgingBar({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
+  const pct = total > 0 ? (value / total) * 100 : 0;
+  return (
+    <div>
+      <div className="flex justify-between text-xs mb-1">
+        <span className="text-neutral-muted">{label}</span>
+        <span className="font-mono text-neutral">{usd(value)}</span>
+      </div>
+      <div className="h-2 bg-surface-high rounded-full overflow-hidden">
+        <div className={`h-full ${color} rounded-full transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr + "T00:00:00");
+  return d.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" });
 }

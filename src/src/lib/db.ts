@@ -1,6 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { join, appDataDir } from "@tauri-apps/api/path";
-import type { Plan, Athlete, Product, Sale, SaleItem, Payment, DashboardStats, ImportResult, ExcelRow } from "../types";
+import type { Plan, Athlete, Product, Sale, SaleItem, Payment, DashboardStats, ImportResult, ExcelRow, SalesChartPoint, CXCAging, DebtorRow } from "../types";
 
 export const db = {
   async init(): Promise<void> {
@@ -146,6 +146,22 @@ export const db = {
 
   async getExpiringAthletes(): Promise<Athlete[]> {
     return invoke("get_expiring_athletes");
+  },
+
+  async getSalesPeriod(period: string): Promise<number> {
+    return invoke("get_sales_period", { period });
+  },
+
+  async getSalesChartData(): Promise<SalesChartPoint[]> {
+    return invoke("get_sales_chart_data");
+  },
+
+  async getCXCAging(): Promise<CXCAging> {
+    return invoke("get_cxc_aging");
+  },
+
+  async getDebtorsDetailed(): Promise<DebtorRow[]> {
+    return invoke("get_debtors_detailed");
   },
 
   // Settings
