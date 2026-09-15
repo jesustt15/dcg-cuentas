@@ -1,5 +1,5 @@
 use calamine::{open_workbook, Data, Reader, Xlsx};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::Manager;
@@ -191,6 +191,14 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS reminders (
+        id TEXT PRIMARY KEY,
+        athlete_id TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'whatsapp',
+        FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+      );
       ",
     )
     .map_err(|e| e.to_string())?;
@@ -224,6 +232,13 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
   conn
     .execute(
       "INSERT OR IGNORE INTO settings (key, value) VALUES ('usd_ves', '36.50')",
+      [],
+    )
+    .map_err(|e| e.to_string())?;
+
+  conn
+    .execute(
+      "INSERT OR IGNORE INTO settings (key, value) VALUES ('reminder_template', 'Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}. Por favor realiza tu pago para mantener tu acceso activo. Gracias!')",
       [],
     )
     .map_err(|e| e.to_string())?;
@@ -1511,4 +1526,96 @@ pub fn import_athletes_from_excel(
     skipped,
     errors,
   })
+}
+
+// ─── Settings (generic) ──────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn get_setting(app: tauri::AppHandle, key: String) -> Result<Option<String>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  let val: Option<String> = conn
+    .query_row(
+      "SELECT value FROM settings WHERE key = ?1",
+      params![&key],
+      |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())?;
+  Ok(val)
+}
+
+#[tauri::command]
+pub fn set_setting(app: tauri::AppHandle, key: String, value: String) -> Result<(), String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  conn
+    .execute(
+      "INSERT INTO settings (key, value) VALUES (?1, ?2)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+      params![&key, &value],
+    )
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+// ─── Reminders ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn log_reminder(
+  app: tauri::AppHandle,
+  athlete_id: String,
+  channel: String,
+) -> Result<(), String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+  let id = uuid::Uuid::new_v4().to_string();
+  let now = chrono::Utc::now().to_rfc3339();
+  conn
+    .execute(
+      "INSERT INTO reminders (id, athlete_id, sent_at, channel) VALUES (?1, ?2, ?3, ?4)",
+      params![&id, &athlete_id, &now, &channel],
+    )
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub fn get_pending_reminders(app: tauri::AppHandle) -> Result<Vec<Athlete>, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  // Athletes whose plan expires today or tomorrow (or already expired),
+  // and who have NOT been reminded today.
+  let mut stmt = conn
+    .prepare(
+      "SELECT id, name, phone, plan, status, balance, credit_limit, plan_expires_at, created_at
+       FROM athletes
+       WHERE status = 'activo'
+         AND plan_expires_at IS NOT NULL
+         AND DATE(plan_expires_at) <= DATE('now', '+1 day')
+         AND NOT EXISTS (
+           SELECT 1 FROM reminders r
+           WHERE r.athlete_id = athletes.id
+             AND DATE(r.sent_at) = DATE('now')
+         )
+       ORDER BY plan_expires_at ASC",
+    )
+    .map_err(|e| e.to_string())?;
+  let athletes = stmt
+    .query_map([], |row| {
+      Ok(Athlete {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        phone: row.get(2)?,
+        plan: row.get(3)?,
+        status: row.get(4)?,
+        balance: row.get(5)?,
+        credit_limit: row.get(6)?,
+        plan_expires_at: row.get(7)?,
+        created_at: row.get(8)?,
+      })
+    })
+    .map_err(|e| e.to_string())?;
+  Ok(athletes.filter_map(|r| r.ok()).collect())
 }

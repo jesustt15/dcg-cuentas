@@ -9,6 +9,7 @@ const initialState: DatabaseState = {
   sales: [],
   dashboard: null,
   usdVes: 36.5,
+  pendingReminders: [],
   loading: true,
   error: null,
 };
@@ -25,15 +26,16 @@ export function DbProvider({ children }: { children: React.ReactNode }) {
   const loadData = useCallback(async () => {
     try {
       await db.init();
-      const [plans, athletes, products, sales, dashboard, usdVes] = await Promise.all([
+      const [plans, athletes, products, sales, dashboard, usdVes, pendingReminders] = await Promise.all([
         db.getPlans(),
         db.getAthletes(),
         db.getProducts(),
         db.getSales(),
         db.getDashboard(),
         db.getUsdVes(),
+        db.getPendingReminders(),
       ]);
-      setState({ plans, athletes, products, sales, dashboard, usdVes, loading: false, error: null });
+      setState({ plans, athletes, products, sales, dashboard, usdVes, pendingReminders, loading: false, error: null });
     } catch (e) {
       setState((s) => ({
         ...s,

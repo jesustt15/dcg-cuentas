@@ -1,12 +1,19 @@
 import { useDb } from "@/hooks/DbProvider";
 import { usd, methodLabel, methodBadgeClass } from "@/lib/db";
-import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle } from "lucide-react";
+import { db } from "@/lib/db";
+import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle, MessageCircle, Settings } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useState } from "react";
+import { normalizeVePhone, buildWaLink } from "@/lib/phone";
+import { renderReminder } from "@/lib/reminder";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import ReminderSettingsModal from "@/components/ReminderSettingsModal";
 
 export default function Dashboard() {
-  const { state } = useDb();
+  const { state, refresh } = useDb();
   const d = state.dashboard;
   const navigate = useNavigate();
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   if (!d) {
     return <div className="text-neutral-muted text-sm">Cargando...</div>;
@@ -83,6 +90,65 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* PENDING REMINDERS BANNER */}
+      {state.pendingReminders.length > 0 && (
+        <div className="bg-gold/10 border border-gold/30 rounded-lg p-4 flex items-center gap-3">
+          <MessageCircle className="w-5 h-5 text-gold flex-shrink-0" />
+          <p className="text-sm text-gold flex-1">
+            <strong>{state.pendingReminders.length}</strong> atleta
+            {state.pendingReminders.length !== 1 ? "s" : ""} necesita
+            {state.pendingReminders.length !== 1 ? "n" : ""} recordatorio hoy
+          </p>
+          <button
+            onClick={async () => {
+              const confirmed = confirm(
+                `¿Abrir ${state.pendingReminders.length} chats de WhatsApp con recordatorios?`,
+              );
+              if (!confirmed) return;
+
+              for (let i = 0; i < state.pendingReminders.length; i++) {
+                const athlete = state.pendingReminders[i];
+                const phone = normalizeVePhone(athlete.phone);
+                if (!phone) continue;
+
+                const plan = state.plans.find((p) => p.code === athlete.plan);
+                const vars: Record<string, string> = {
+                  nombre: athlete.name,
+                  plan: plan?.name || athlete.plan,
+                  vence: athlete.plan_expires_at || "sin fecha",
+                  monto: String(plan?.price || 0),
+                  dias: athlete.plan_expires_at
+                    ? String(
+                        Math.ceil(
+                          (new Date(athlete.plan_expires_at).getTime() - Date.now()) /
+                            (1000 * 60 * 60 * 24),
+                        ),
+                      )
+                    : "0",
+                };
+                const template =
+                  (await db.getSetting("reminder_template")) ||
+                  "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
+                const message = renderReminder(template, vars);
+
+                await openUrl(buildWaLink(phone, message));
+                await db.logReminder(athlete.id, "whatsapp");
+
+                // Delay between chats to avoid spam
+                if (i < state.pendingReminders.length - 1) {
+                  await new Promise((r) => setTimeout(r, 1000));
+                }
+              }
+
+              refresh();
+            }}
+            className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-gold text-obsidian-dim rounded hover:bg-gold-light transition-colors shrink-0"
+          >
+            Enviar todos
+          </button>
+        </div>
+      )}
+
       {/* EXPIRING PLANS PANEL */}
       <div>
         <div className="flex items-center gap-2 mb-4">
@@ -90,6 +156,13 @@ export default function Dashboard() {
           <h3 className="text-xl font-bold font-heading text-gold tracking-tight">
             Planes por Vencer
           </h3>
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="ml-auto p-2 rounded-lg bg-surface-high hover:bg-surface-higher text-neutral-muted transition-colors"
+            title="Configurar plantilla de recordatorio"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
         </div>
         {d.expiring_athletes.length === 0 ? (
           <div className="bg-[#121215] border border-divider rounded p-6">
@@ -106,6 +179,7 @@ export default function Dashboard() {
                   <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Plan</th>
                   <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Vence</th>
                   <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Estado</th>
+                  <th className="text-left px-5 py-3 uppercase-label text-neutral-muted">Acción</th>
                 </tr>
               </thead>
               <tbody>
@@ -136,6 +210,42 @@ export default function Dashboard() {
                         <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${badge.className}`}>
                           {badge.label}
                         </span>
+                      </td>
+                      <td className="px-5 py-3">
+                        {a.phone && normalizeVePhone(a.phone) && (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const phone = normalizeVePhone(a.phone)!;
+                              const plan = state.plans.find((p) => p.code === a.plan);
+                              const vars: Record<string, string> = {
+                                nombre: a.name,
+                                plan: plan?.name || a.plan,
+                                vence: a.plan_expires_at || "sin fecha",
+                                monto: String(plan?.price || 0),
+                                dias: a.plan_expires_at
+                                  ? String(
+                                      Math.ceil(
+                                        (new Date(a.plan_expires_at).getTime() - Date.now()) /
+                                          (1000 * 60 * 60 * 24),
+                                      ),
+                                    )
+                                  : "0",
+                              };
+                              const template =
+                                (await db.getSetting("reminder_template")) ||
+                                "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
+                              const message = renderReminder(template, vars);
+                              await openUrl(buildWaLink(phone, message));
+                              await db.logReminder(a.id, "whatsapp");
+                              refresh();
+                            }}
+                            className="p-2 rounded-lg bg-green-600/20 hover:bg-green-600/30 text-green-400 transition-colors"
+                            title="Enviar recordatorio por WhatsApp"
+                          >
+                            <MessageCircle className="w-4 h-4" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
@@ -210,6 +320,11 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      <ReminderSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />
     </div>
   );
 }

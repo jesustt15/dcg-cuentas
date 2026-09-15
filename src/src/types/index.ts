@@ -94,6 +94,7 @@ export interface DatabaseState {
   sales: Sale[];
   dashboard: DashboardStats | null;
   usdVes: number;
+  pendingReminders: Athlete[];
   loading: boolean;
   error: string | null;
 }

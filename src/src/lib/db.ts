@@ -157,6 +157,22 @@ export const db = {
     await invoke("set_usd_ves", { rate });
   },
 
+  async getSetting(key: string): Promise<string | null> {
+    return invoke<string | null>("get_setting", { key });
+  },
+
+  async setSetting(key: string, value: string): Promise<void> {
+    await invoke("set_setting", { key, value });
+  },
+
+  async logReminder(athleteId: string, channel: string): Promise<void> {
+    await invoke("log_reminder", { athleteId, channel });
+  },
+
+  async getPendingReminders(): Promise<Athlete[]> {
+    return invoke<Athlete[]>("get_pending_reminders");
+  },
+
   async fetchBcvRate(): Promise<number> {
     return invoke("fetch_bcv_rate");
   },
