@@ -14,6 +14,7 @@ export default function Dashboard() {
   const d = state.dashboard;
   const navigate = useNavigate();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [showBatchModal, setShowBatchModal] = useState(false);
 
   if (!d) {
     return <div className="text-neutral-muted text-sm">Cargando...</div>;
@@ -100,51 +101,10 @@ export default function Dashboard() {
             {state.pendingReminders.length !== 1 ? "n" : ""} recordatorio hoy
           </p>
           <button
-            onClick={async () => {
-              const confirmed = confirm(
-                `¿Abrir ${state.pendingReminders.length} chats de WhatsApp con recordatorios?`,
-              );
-              if (!confirmed) return;
-
-              for (let i = 0; i < state.pendingReminders.length; i++) {
-                const athlete = state.pendingReminders[i];
-                const phone = normalizeVePhone(athlete.phone);
-                if (!phone) continue;
-
-                const plan = state.plans.find((p) => p.code === athlete.plan);
-                const vars: Record<string, string> = {
-                  nombre: athlete.name,
-                  plan: plan?.name || athlete.plan,
-                  vence: athlete.plan_expires_at || "sin fecha",
-                  monto: String(plan?.price || 0),
-                  dias: athlete.plan_expires_at
-                    ? String(
-                        Math.ceil(
-                          (new Date(athlete.plan_expires_at).getTime() - Date.now()) /
-                            (1000 * 60 * 60 * 24),
-                        ),
-                      )
-                    : "0",
-                };
-                const template =
-                  (await db.getSetting("reminder_template")) ||
-                  "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
-                const message = renderReminder(template, vars);
-
-                await openUrl(buildWaLink(phone, message));
-                await db.logReminder(athlete.id, "whatsapp");
-
-                // Delay between chats to avoid spam
-                if (i < state.pendingReminders.length - 1) {
-                  await new Promise((r) => setTimeout(r, 1000));
-                }
-              }
-
-              refresh();
-            }}
+            onClick={() => setShowBatchModal(true)}
             className="px-4 py-2 text-xs font-bold uppercase tracking-wider bg-gold text-obsidian-dim rounded hover:bg-gold-light transition-colors shrink-0"
           >
-            Enviar todos
+            Preparar todos
           </button>
         </div>
       )}
@@ -325,6 +285,16 @@ export default function Dashboard() {
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
       />
+      <BatchSendModal
+        isOpen={showBatchModal}
+        onClose={() => setShowBatchModal(false)}
+        athletes={state.pendingReminders}
+        plans={state.plans}
+        onSent={() => {
+          setShowBatchModal(false);
+          refresh();
+        }}
+      />
     </div>
   );
 }
@@ -343,7 +313,7 @@ function getExpiryBadge(expiresAt: string | null): { label: string; className: s
     return { label: "Vence hoy", className: "bg-gold/20 text-gold", kind: "today" };
   }
   return {
-    label: `Vence en ${diffDays} d&iacute;a${diffDays !== 1 ? "s" : ""}`,
+    label: `Vence en ${diffDays} día${diffDays !== 1 ? "s" : ""}`,
     className: "bg-surface-high text-neutral",
     kind: "upcoming",
   };
@@ -391,6 +361,138 @@ function MetricCard({ label, value, sub, icon, accent, special }: MetricCardProp
       </div>
       <p className="text-2xl font-bold font-mono tracking-tight text-neutral">{value}</p>
       {sub && <p className="text-xs text-neutral-muted mt-1">{sub}</p>}
+    </div>
+  );
+}
+
+import type { Athlete, Plan } from "@/types";
+
+function BatchSendModal({
+  isOpen,
+  onClose,
+  athletes,
+  plans,
+  onSent,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+  athletes: Athlete[];
+  plans: Plan[];
+  onSent: () => void;
+}) {
+  const [sentIds, setSentIds] = useState<Set<string>>(new Set());
+
+  if (!isOpen) return null;
+
+  const getVars = (a: Athlete) => {
+    const plan = plans.find((p) => p.code === a.plan);
+    const expiresAt = a.plan_expires_at ? new Date(a.plan_expires_at + "T00:00:00") : null;
+    const daysUntil = expiresAt
+      ? Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      : 0;
+    return {
+      nombre: a.name,
+      plan: plan?.name || a.plan,
+      vence: a.plan_expires_at || "sin fecha",
+      monto: String(plan?.price || 0),
+      dias: String(Math.max(0, daysUntil)),
+    };
+  };
+
+  const handleMessageSent = async (a: Athlete) => {
+    const phone = normalizeVePhone(a.phone);
+    if (!phone) return;
+    const vars = getVars(a);
+    const template =
+      (await db.getSetting("reminder_template")) ||
+      "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
+    const message = renderReminder(template, vars);
+    await openUrl(buildWaLink(phone, message));
+    await db.logReminder(a.id, "whatsapp");
+    setSentIds((prev) => new Set(prev).add(a.id));
+  };
+
+  const pending = athletes.filter((a) => !sentIds.has(a.id));
+  const allSent = pending.length === 0;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" onClick={onClose}>
+      <div
+        className="bg-[#1a1a1a] border border-divider rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-divider">
+          <div className="flex items-center gap-2">
+            <MessageCircle className="w-5 h-5 text-gold" />
+            <h3 className="text-lg font-bold font-heading text-gold">Enviar recordatorios</h3>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-surface-high text-neutral-muted transition-colors">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-4 overflow-y-auto flex-1 space-y-3">
+          {allSent ? (
+            <div className="text-center py-8">
+              <p className="text-neutral text-sm">Todos los recordatorios fueron enviados.</p>
+              <button
+                onClick={onSent}
+                className="mt-4 px-4 py-2 text-xs font-bold uppercase tracking-wider bg-gold text-obsidian-dim rounded hover:bg-gold-light transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          ) : (
+            athletes.map((a) => {
+              const isSent = sentIds.has(a.id);
+              const phone = normalizeVePhone(a.phone);
+              if (!phone) return null;
+              const vars = getVars(a);
+              const template =
+                "Hola {nombre}! Te recordamos que tu plan {plan} vence el {vence}. Monto: ${monto}.";
+              const message = renderReminder(template, vars);
+              const waUrl = buildWaLink(phone, message);
+
+              return (
+                <div
+                  key={a.id}
+                  className={`bg-[#121215] border border-divider rounded-lg p-4 transition-opacity ${
+                    isSent ? "opacity-50" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-neutral truncate">{a.name}</p>
+                      <p className="text-xs text-neutral-muted mt-0.5">{plans.find((p) => p.code === a.plan)?.name || a.plan}</p>
+                    </div>
+                    {isSent ? (
+                      <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold bg-status-success/20 text-status-success">
+                        Enviado
+                      </span>
+                    ) : (
+                      <a
+                        href={waUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => handleMessageSent(a)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold uppercase tracking-wider bg-green-600/20 text-green-400 rounded hover:bg-green-600/30 transition-colors"
+                      >
+                        <MessageCircle className="w-3.5 h-3.5" />
+                        Abrir chat
+                      </a>
+                    )}
+                  </div>
+                  {!isSent && (
+                    <p className="mt-2 text-xs text-neutral-muted line-clamp-2">{message}</p>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
     </div>
   );
 }
