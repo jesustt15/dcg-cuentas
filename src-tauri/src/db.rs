@@ -114,6 +114,36 @@ pub struct SaleItemInput {
   pub unit_price: f64,
 }
 
+// ─── Income Report Types ─────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct IncomeReport {
+  pub period: String,
+  pub start_date: String,
+  pub end_date: String,
+  pub memberships_total: f64,
+  pub memberships_count: i32,
+  pub pos_total: f64,
+  pub pos_count: i32,
+  pub pos_by_category: Vec<CategoryBreakdown>,
+  pub total_income: f64,
+  pub daily_breakdown: Vec<DailyIncome>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CategoryBreakdown {
+  pub category: String,
+  pub total: f64,
+  pub count: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DailyIncome {
+  pub date: String,
+  pub memberships: f64,
+  pub pos: f64,
+}
+
 // ─── Excel Import Types ──────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1778,12 +1808,12 @@ pub fn get_pending_reminders(app: tauri::AppHandle) -> Result<Vec<Athlete>, Stri
        WHERE status = 'activo'
          AND plan_expires_at IS NOT NULL
          AND DATE(plan_expires_at) <= DATE('now', '+1 day')
-         AND NOT EXISTS (
-           SELECT 1 FROM reminders r
-           WHERE r.athlete_id = athletes.id
-             AND DATE(r.sent_at) = DATE('now')
-         )
-       ORDER BY plan_expires_at ASC",
+          AND NOT EXISTS (
+            SELECT 1 FROM reminders r
+            WHERE r.athlete_id = athletes.id
+              AND DATE(r.sent_at) = DATE('now')
+          )
+        ORDER BY plan_expires_at ASC",
     )
     .map_err(|e| e.to_string())?;
   let athletes = stmt
@@ -1802,4 +1832,118 @@ pub fn get_pending_reminders(app: tauri::AppHandle) -> Result<Vec<Athlete>, Stri
     })
     .map_err(|e| e.to_string())?;
   Ok(athletes.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+pub fn get_income_report(app: tauri::AppHandle, period: String) -> Result<IncomeReport, String> {
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let range = match period.as_str() {
+    "day" => "-1 days",
+    "week" => "-7 days",
+    "month" => "-30 days",
+    _ => return Err(format!("Unknown period: {}", period)),
+  };
+
+  // ── Memberships total (payments in period) ──
+  let (memberships_total, memberships_count): (f64, i32) = conn
+    .query_row(
+      "SELECT COALESCE(SUM(amount), 0), COUNT(*)
+       FROM payments
+       WHERE DATE(created_at) >= DATE('now', ?1)",
+      [&range],
+      |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i32>(1)?)),
+    )
+    .map_err(|e| e.to_string())?;
+
+  // ── POS total (sales in period) ──
+  let (pos_total, pos_count): (f64, i32) = conn
+    .query_row(
+      "SELECT COALESCE(SUM(total), 0), COUNT(*)
+       FROM sales
+       WHERE DATE(created_at) >= DATE('now', ?1)",
+      [&range],
+      |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i32>(1)?)),
+    )
+    .map_err(|e| e.to_string())?;
+
+  // ── POS by category ──
+  let mut cat_stmt = conn
+    .prepare(
+      "SELECT p.category,
+              COALESCE(SUM(si.qty * si.unit_price), 0) as total,
+              COUNT(DISTINCT si.sale_id) as sale_count
+       FROM sale_items si
+       JOIN sales s ON si.sale_id = s.id
+       JOIN products p ON si.product_id = p.id
+       WHERE DATE(s.created_at) >= DATE('now', ?1)
+       GROUP BY p.category
+       ORDER BY total DESC",
+    )
+    .map_err(|e| e.to_string())?;
+
+  let pos_by_category: Vec<CategoryBreakdown> = cat_stmt
+    .query_map([&range], |row| {
+      Ok(CategoryBreakdown {
+        category: row.get(0)?,
+        total: row.get(1)?,
+        count: row.get(2)?,
+      })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  // ── Daily breakdown: memberships vs POS per day ──
+  let mut daily_stmt = conn
+    .prepare(
+      "SELECT
+        d.date,
+        COALESCE((SELECT SUM(p.amount) FROM payments p WHERE DATE(p.created_at) = d.date), 0) as memberships,
+        COALESCE((SELECT SUM(s.total) FROM sales s WHERE DATE(s.created_at) = d.date), 0) as pos
+       FROM (
+         SELECT DISTINCT DATE(created_at) as date FROM payments WHERE DATE(created_at) >= DATE('now', ?1)
+         UNION
+         SELECT DISTINCT DATE(created_at) as date FROM sales WHERE DATE(created_at) >= DATE('now', ?1)
+       ) d
+       ORDER BY d.date ASC",
+    )
+    .map_err(|e| e.to_string())?;
+
+  let daily_breakdown: Vec<DailyIncome> = daily_stmt
+    .query_map([&range], |row| {
+      Ok(DailyIncome {
+        date: row.get(0)?,
+        memberships: row.get(1)?,
+        pos: row.get(2)?,
+      })
+    })
+    .map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+
+  let total_income = memberships_total + pos_total;
+
+  let end_date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+  let start_date = conn
+    .query_row(
+      "SELECT DATE('now', ?1)",
+      [&range],
+      |row| row.get::<_, String>(0),
+    )
+    .unwrap_or_else(|_| end_date.clone());
+
+  Ok(IncomeReport {
+    period,
+    start_date,
+    end_date,
+    memberships_total,
+    memberships_count,
+    pos_total,
+    pos_count,
+    pos_by_category,
+    total_income,
+    daily_breakdown,
+  })
 }

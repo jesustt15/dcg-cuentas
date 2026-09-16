@@ -46,6 +46,7 @@ fn main() {
       db::delete_athlete,
       db::preview_excel_athletes,
       db::import_athletes_from_excel,
+      db::get_income_report,
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

@@ -1,6 +1,6 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { join, appDataDir } from "@tauri-apps/api/path";
-import type { Plan, Athlete, Product, Sale, SaleItem, Payment, DashboardStats, ImportResult, ExcelRow, SalesChartPoint, CXCAging, DebtorRow } from "../types";
+import type { Plan, Athlete, Product, Sale, SaleItem, Payment, DashboardStats, ImportResult, ExcelRow, SalesChartPoint, CXCAging, DebtorRow, IncomeReport } from "../types";
 
 export const db = {
   async init(): Promise<void> {
@@ -204,6 +204,11 @@ export const db = {
 
   async importAthletesFromExcel(filePath: string): Promise<ImportResult> {
     return invoke("import_athletes_from_excel", { filePath });
+  },
+
+  // Income Reports
+  async getIncomeReport(period: string): Promise<IncomeReport> {
+    return invoke("get_income_report", { period });
   },
 };
 

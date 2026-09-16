@@ -1,5 +1,5 @@
 import { Routes, Route, Link, useLocation } from "react-router-dom";
-import { LayoutDashboard, Users, ShoppingCart, Package, Pencil, Check, RefreshCw, AlertCircle } from "lucide-react";
+import { LayoutDashboard, Users, ShoppingCart, Package, Pencil, Check, RefreshCw, AlertCircle, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import Dashboard from "@/pages/Dashboard";
 import Athletes from "@/pages/Athletes";
@@ -7,6 +7,7 @@ import AthleteDetail from "@/pages/AthleteDetail";
 import Debts from "@/pages/Debts";
 import POS from "@/pages/POS";
 import Products from "@/pages/Products";
+import Reports from "@/pages/Reports";
 import { useDb } from "@/hooks/DbProvider";
 import { db } from "@/lib/db";
 
@@ -14,6 +15,7 @@ const navItems = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
   { label: "Atletas", path: "/athletes", icon: Users },
   { label: "Deudas", path: "/debts", icon: AlertCircle },
+  { label: "Reportes", path: "/reports", icon: TrendingUp },
   { label: "POS", path: "/pos", icon: ShoppingCart },
   { label: "Productos", path: "/products", icon: Package },
 ];
@@ -152,6 +154,7 @@ export default function App() {
           <Route path="/athletes" element={<Athletes />} />
           <Route path="/athletes/:id" element={<AthleteDetail />} />
           <Route path="/debts" element={<Debts />} />
+          <Route path="/reports" element={<Reports />} />
           <Route path="/pos" element={<POS />} />
           <Route path="/products" element={<Products />} />
         </Routes>

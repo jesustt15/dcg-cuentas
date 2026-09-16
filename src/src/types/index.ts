@@ -111,6 +111,31 @@ export interface ExcelRow {
   error: string | null;
 }
 
+export interface IncomeReport {
+  period: string;
+  start_date: string;
+  end_date: string;
+  memberships_total: number;
+  memberships_count: number;
+  pos_total: number;
+  pos_count: number;
+  pos_by_category: CategoryBreakdown[];
+  total_income: number;
+  daily_breakdown: DailyIncome[];
+}
+
+export interface CategoryBreakdown {
+  category: string;
+  total: number;
+  count: number;
+}
+
+export interface DailyIncome {
+  date: string;
+  memberships: number;
+  pos: number;
+}
+
 export interface DatabaseState {
   plans: Plan[];
   athletes: Athlete[];
