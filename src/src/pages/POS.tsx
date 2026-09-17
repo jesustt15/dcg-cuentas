@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useDb } from "@/hooks/DbProvider";
 import { db, usd, formatBs, productImageUrl } from "@/lib/db";
+import { toast } from "sonner";
 import type { Product } from "@/types";
 import { Search, Plus, Minus, X, ShoppingCart, Check, Package } from "lucide-react";
 
@@ -151,6 +152,7 @@ export default function POS() {
       setAthleteSearch("");
       setPaymentMethod("efectivo");
       setSuccess(true);
+      toast.success("Venta registrada");
       refresh();
       setTimeout(() => setSuccess(false), 3000);
     } catch (e) {

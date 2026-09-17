@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDb } from "@/hooks/DbProvider";
 import { db, usd } from "@/lib/db";
+import { toast } from "sonner";
 import { Plus, Search, Phone, UserX, UserCheck, Trash2, Pencil, AlertTriangle, Upload } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import EditAthleteModal from "@/components/EditAthleteModal";
@@ -30,7 +31,7 @@ export default function Athletes() {
       setDeleteConfirm({ isOpen: false, athlete: null });
       refresh();
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setDeleting(false);
     }
@@ -291,9 +292,10 @@ function CreateForm({
         parseFloat(creditLimit) || 150,
         planExpiresAt || null,
       );
+      toast.success("Atleta creado");
       onCreated();
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setSaving(false);
     }

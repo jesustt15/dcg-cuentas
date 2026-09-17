@@ -1,13 +1,14 @@
 import { useDb } from "@/hooks/DbProvider";
 import { usd, methodLabel, methodBadgeClass } from "@/lib/db";
 import { db } from "@/lib/db";
-import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle, MessageCircle, Settings, ChevronRight } from "lucide-react";
+import { DollarSign, Users, AlertTriangle, TrendingUp, AlertCircle, MessageCircle, Settings, ChevronRight, CreditCard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { normalizeVePhone, buildWaLink } from "@/lib/phone";
 import { renderReminder } from "@/lib/reminder";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import ReminderSettingsModal from "@/components/ReminderSettingsModal";
+import PlansSettingsModal from "@/components/PlansSettingsModal";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import type { DebtorRow } from "@/types";
 
@@ -17,6 +18,7 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showBatchModal, setShowBatchModal] = useState(false);
+  const [showPlansModal, setShowPlansModal] = useState(false);
 
   if (!d) {
     return <div className="text-neutral-muted text-sm">Cargando...</div>;
@@ -246,8 +248,15 @@ export default function Dashboard() {
             Planes por Vencer
           </h3>
           <button
-            onClick={() => setShowSettingsModal(true)}
+            onClick={() => setShowPlansModal(true)}
             className="ml-auto p-2 rounded-lg bg-surface-high hover:bg-surface-higher text-neutral-muted transition-colors"
+            title="Gestionar planes"
+          >
+            <CreditCard className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowSettingsModal(true)}
+            className="p-2 rounded-lg bg-surface-high hover:bg-surface-higher text-neutral-muted transition-colors"
             title="Configurar plantilla de recordatorio"
           >
             <Settings className="w-4 h-4" />
@@ -430,6 +439,11 @@ export default function Dashboard() {
       <ReminderSettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
+      />
+      <PlansSettingsModal
+        isOpen={showPlansModal}
+        onClose={() => setShowPlansModal(false)}
+        onPlansChange={refresh}
       />
       <BatchSendModal
         isOpen={showBatchModal}

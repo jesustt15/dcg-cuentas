@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Camera, Loader2, Package } from "lucide-react";
 import { db, productImageUrl } from "@/lib/db";
+import { toast } from "sonner";
 import type { Product } from "@/types";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -156,6 +157,7 @@ export default function EditProductModal({
       );
       onSave();
       onClose();
+      toast.success("Producto editado");
     } catch (err) {
       setError(String(err));
     } finally {

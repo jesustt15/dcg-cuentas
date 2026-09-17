@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { db, usd, formatBs, methodLabel, methodBadgeClass } from "@/lib/db";
+import { toast } from "sonner";
 import type { Athlete, Sale, SaleItem, Payment } from "@/types";
 import { ArrowLeft, CreditCard, DollarSign, ChevronRight, Calendar, CheckCircle, MessageCircle } from "lucide-react";
 import { useDb } from "@/hooks/DbProvider";
@@ -405,9 +406,10 @@ function PaymentForm({
     setSaving(true);
     try {
       await db.addPayment(athleteId, amt, method);
+      toast.success("Abono registrado");
       onSuccess();
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setSaving(false);
     }

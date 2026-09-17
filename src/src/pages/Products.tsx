@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useDb } from "@/hooks/DbProvider";
 import { db, productImageUrl } from "@/lib/db";
+import { toast } from "sonner";
 import { Plus, Trash2, Pencil, Package, Camera, Loader2 } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import EditProductModal from "@/components/EditProductModal";
@@ -45,8 +46,9 @@ export default function Products() {
       await db.deleteProduct(deleteConfirm.product.id);
       setDeleteConfirm({ isOpen: false, product: null });
       refresh();
+      toast.success("Producto eliminado");
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setDeleting(false);
     }
@@ -74,8 +76,9 @@ export default function Products() {
 
       // Refresh to get updated product data and rebuild URLs
       refresh();
+      toast.success("Imagen actualizada");
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setUploadingId(null);
     }
@@ -304,9 +307,10 @@ function CreateForm({
         parseInt(stock) || 0,
         parseInt(minStock) || 5,
       );
+      toast.success("Producto creado");
       onCreated();
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setSaving(false);
     }

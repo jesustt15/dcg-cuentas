@@ -2,6 +2,7 @@ import { useState, useMemo } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useDb } from "@/hooks/DbProvider";
 import { db, usd, formatBs } from "@/lib/db";
+import { toast } from "sonner";
 import type { Athlete } from "@/types";
 import {
   Search,
@@ -81,8 +82,9 @@ export default function Debts() {
       setPaymentAthlete(null);
       setPaymentAmount("");
       refresh();
+      toast.success("Deuda registrada");
     } catch (err) {
-      alert(String(err));
+      toast.error(String(err));
     } finally {
       setPaying(false);
     }

@@ -10,6 +10,9 @@ fn main() {
     .invoke_handler(tauri::generate_handler![
       db::init_db,
       db::get_plans,
+      db::save_plan,
+      db::update_plan,
+      db::delete_plan,
       db::get_athletes,
       db::get_athlete,
       db::create_athlete,

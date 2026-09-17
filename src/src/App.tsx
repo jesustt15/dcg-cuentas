@@ -1,6 +1,7 @@
 import { Routes, Route, Link, useLocation } from "react-router-dom";
 import { LayoutDashboard, Users, ShoppingCart, Package, Pencil, Check, RefreshCw, AlertCircle, TrendingUp } from "lucide-react";
 import { useState } from "react";
+import { Toaster } from "sonner";
 import Dashboard from "@/pages/Dashboard";
 import Athletes from "@/pages/Athletes";
 import AthleteDetail from "@/pages/AthleteDetail";
@@ -158,6 +159,7 @@ export default function App() {
           <Route path="/pos" element={<POS />} />
           <Route path="/products" element={<Products />} />
         </Routes>
+        <Toaster theme="dark" richColors position="top-right" />
       </main>
     </div>
   );

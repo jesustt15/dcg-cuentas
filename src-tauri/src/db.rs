@@ -285,6 +285,14 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
       .map_err(|e| e.to_string())?;
   }
 
+  // Unconditional 4DIAS seed — idempotent migration for existing databases
+  conn
+    .execute(
+      "INSERT OR IGNORE INTO plans (code, name, price) VALUES ('4DIAS', 'Plan 4 Días', 35)",
+      [],
+    )
+    .map_err(|e| e.to_string())?;
+
   // Seed settings
   conn
     .execute(
@@ -353,6 +361,100 @@ pub fn get_plans(app: tauri::AppHandle) -> Result<Vec<Plan>, String> {
     })
     .map_err(|e| e.to_string())?;
   Ok(plans.filter_map(|r| r.ok()).collect())
+}
+
+fn validate_plan_input(name: &str, price: f64) -> Result<(), String> {
+  if name.trim().is_empty() {
+    return Err("El nombre es requerido".to_string());
+  }
+  if price <= 0.0 {
+    return Err("El precio debe ser mayor a 0".to_string());
+  }
+  Ok(())
+}
+
+#[tauri::command]
+pub fn save_plan(
+  app: tauri::AppHandle,
+  code: String,
+  name: String,
+  price: f64,
+) -> Result<(), String> {
+  validate_plan_input(&name, price)?;
+  let normalized_code = code.trim().to_uppercase();
+  if normalized_code.is_empty() {
+    return Err("El código es requerido".to_string());
+  }
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let exists: bool = conn
+    .query_row(
+      "SELECT COUNT(*) FROM plans WHERE code = ?1",
+      params![&normalized_code],
+      |row| row.get::<_, i32>(0),
+    )
+    .map_err(|e| e.to_string())?
+    > 0;
+  if exists {
+    return Err("El código ya existe".to_string());
+  }
+
+  conn
+    .execute(
+      "INSERT INTO plans (code, name, price) VALUES (?1, ?2, ?3)",
+      params![&normalized_code, &name.trim(), &price],
+    )
+    .map_err(|e| e.to_string())?;
+  Ok(())
+}
+
+#[tauri::command]
+pub fn update_plan(
+  app: tauri::AppHandle,
+  code: String,
+  name: String,
+  price: f64,
+) -> Result<(), String> {
+  validate_plan_input(&name, price)?;
+  let normalized_code = code.trim().to_uppercase();
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let rows_affected = conn
+    .execute(
+      "UPDATE plans SET name = ?1, price = ?2 WHERE code = ?3",
+      params![&name.trim(), &price, &normalized_code],
+    )
+    .map_err(|e| e.to_string())?;
+
+  if rows_affected == 0 {
+    return Err("Plan no encontrado".to_string());
+  }
+  Ok(())
+}
+
+#[tauri::command]
+pub fn delete_plan(app: tauri::AppHandle, code: String) -> Result<(), String> {
+  let normalized_code = code.trim().to_uppercase();
+  let conn = connect(&app)?;
+  ensure_schema(&conn)?;
+
+  let ref_count: i32 = conn
+    .query_row(
+      "SELECT COUNT(*) FROM athletes WHERE plan = ?1",
+      params![&normalized_code],
+      |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())?;
+  if ref_count > 0 {
+    return Err(format!("Plan en uso por {ref_count} atletas"));
+  }
+
+  conn
+    .execute("DELETE FROM plans WHERE code = ?1", params![&normalized_code])
+    .map_err(|e| e.to_string())?;
+  Ok(())
 }
 
 #[tauri::command]

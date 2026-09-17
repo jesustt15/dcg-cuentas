@@ -12,6 +12,18 @@ export const db = {
     return invoke("get_plans");
   },
 
+  async savePlan(code: string, name: string, price: number): Promise<void> {
+    await invoke("save_plan", { code, name, price });
+  },
+
+  async updatePlan(code: string, name: string, price: number): Promise<void> {
+    await invoke("update_plan", { code, name, price });
+  },
+
+  async deletePlan(code: string): Promise<void> {
+    await invoke("delete_plan", { code });
+  },
+
   // Athletes
   async getAthletes(): Promise<Athlete[]> {
     return invoke("get_athletes");
